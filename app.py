@@ -1,7 +1,5 @@
 import pyarrow.parquet as pq
-import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from shiny import App, Inputs, Outputs, Session, reactive, render, req, ui
@@ -9,11 +7,20 @@ from shinywidgets import output_widget, render_widget
 
 genes = pd.read_csv("DETECTED_GENES.csv", header=None, index_col=False)
 
+mode="light"
+
 ages = ["Young", "Adult", "Old"]
 sexes = ["Female", "Male"]
 lines = ["Astrocytes", "Neurons", "Microglia"]
 comp_order = ["modCG", "mCG", "hmCG"]
-sorted_genes = sorted(genes[0])
+
+def sort_key(g):
+    starts_with_digit = g[0].isdigit()
+    ends_with_rik = g.lower().endswith('rik')
+    return (ends_with_rik, starts_with_digit, g.lower())
+
+sorted_genes = sorted(genes[0], key=sort_key)
+
 color_map = {
     'Young': "#74a5ce",
     'Adult': "#afc75b",
@@ -113,8 +120,10 @@ app_ui = ui.page_sidebar(
                 selected=lines
             ),
         ),
-        ui.download_button("download_data", "Download Data"),
-        ui.download_button("download_plot", "Download Plot")
+        ui.download_button("download_expr", "Download Expression Data"),
+        ui.download_button("download_gene", "Download Gene Body Data"),
+        ui.download_button("download_tss", "Download Promoter Data"),
+        ui.input_action_button("toggle_dark", "Toggle Dark Mode")
     ),
     ui.page_navbar(
         ui.nav_panel(
@@ -136,15 +145,31 @@ app_ui = ui.page_sidebar(
 )
 
 def server(input: Inputs, output: Outputs, session: Session):
-    @render.download(filename="out_data.csv")
-    def download_data():
+    @render.download(filename="gene_expression_data.csv")
+    def download_expr():
         outData = filtered_expr()
-        return outData.to_csv("out_data.csv", index=False)
+        yield outData.to_csv(index=False)
     
-    @render.download(filename="out_plot.png")
-    def download_plot():
-        outPlot = expression_plot()
-        return outPlot.write_image("out_plot.png", index=False)
+    @render.download(filename="gene_body_methylation_data.csv")
+    def download_gene():
+        outData = filtered_body()
+        yield outData.to_csv(index=False)
+
+    @render.download(filename="promoter_methylation_data.csv")
+    def download_tss():
+        outData = filtered_tss()
+        yield outData.to_csv(index=False)
+    
+    @reactive.effect
+    @reactive.event(input.toggle_dark)
+    def _():
+        global mode
+        if mode == "light":
+            ui.update_dark_mode("dark")
+            mode = "dark"
+        else:
+            ui.update_dark_mode("light")
+            mode = "light"
     
     @reactive.Calc
     def filtered_expr() -> pd.DataFrame:
@@ -190,6 +215,14 @@ def server(input: Inputs, output: Outputs, session: Session):
             return
         fig = go.Figure()
         data = filtered_expr()
+        if mode == "light":
+            bgcolor = "#c2c2c2"
+            fontcolor = "#000000"
+            papercolor = "#ffffff"
+        else:
+            bgcolor = "#4e4e4e"
+            fontcolor = "#ffffff"
+            papercolor = "#252525"
         if input.filter() == "1":
             for group in data['AGE'].unique():
                 fig.add_trace(go.Box(y = data[data['AGE'] == group][input.gene()],
@@ -231,12 +264,18 @@ def server(input: Inputs, output: Outputs, session: Session):
             title_font = dict(
                 size = 24,
                 textcase = "upper",
-                weight = "bold"
+                weight = "bold",
+                color = fontcolor
+            ),
+            font = dict(
+                color = fontcolor
             ),
             yaxis_title = "RPKM",
             xaxis_title = "",
             showlegend = False,
-            plot_bgcolor = "#f0f0f0"
+            paper_bgcolor = papercolor,
+            plot_bgcolor = bgcolor,
+            margin=dict(t=100)
         )
         return fig
     
@@ -286,6 +325,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig = make_subplots(rows=1, cols=3)
         body_data = filtered_body()
         position=1
+        if mode == "light":
+            bgcolor = "#c2c2c2"
+            fontcolor = "#000000"
+            papercolor = "#ffffff"
+        else:
+            bgcolor = "#4e4e4e"
+            fontcolor = "#ffffff"
+            papercolor = "#252525"
         for comp in body_data['COMP'].unique():
             comp_data = body_data[body_data['COMP'] == comp]
             if input.filter() == "1":
@@ -334,7 +381,18 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_layout(
             title = "Gene Body Methylation",
             showlegend = False,
-            plot_bgcolor = "#f0f0f0"
+            title_font = dict(
+                size = 24,
+                textcase = "upper",
+                weight = "bold",
+                color = fontcolor
+            ),
+            font = dict(
+                color = fontcolor
+            ),
+            paper_bgcolor = papercolor,
+            plot_bgcolor = bgcolor,
+            margin=dict(t=100)
         )
 
         fig.update_yaxes(title_text="modCG (%)", range=[0, 100], row=1, col=1)
@@ -388,6 +446,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig = make_subplots(rows=1, cols=3)
         tss_data = filtered_tss()
         position=1
+        if mode == "light":
+            bgcolor = "#c2c2c2"
+            fontcolor = "#000000"
+            papercolor = "#ffffff"
+        else:
+            bgcolor = "#4e4e4e"
+            fontcolor = "#ffffff"
+            papercolor = "#252525"
         for comp in tss_data['COMP'].unique():
             comp_data = tss_data[tss_data['COMP'] == comp]
             if input.filter() == "1":
@@ -436,13 +502,23 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_layout(
             title = "Promoter Methylation",
             showlegend = False,
-            plot_bgcolor = "#f0f0f0"
+            title_font = dict(
+                size = 24,
+                textcase = "upper",
+                weight = "bold",
+                color = fontcolor
+            ),
+            font = dict(
+                color = fontcolor
+            ),
+            paper_bgcolor = papercolor,
+            plot_bgcolor = bgcolor,
+            margin=dict(t=100)
         )
         
         fig.update_yaxes(title_text="modCG (%)", range=[0, 100], row=1, col=1)
         fig.update_yaxes(title_text="mCG (%)", range=[0, 100], row=1, col=2)
         fig.update_yaxes(title_text="hmCG (%)", range=[0, 100], row=1, col=3)
         return fig
-
 
 app = App(app_ui, server)
