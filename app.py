@@ -186,7 +186,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render_widget
     def expression_plot():
-        if input.gene() not in genes:
+        if input.gene() not in sorted_genes:
             return
         fig = go.Figure()
         data = filtered_expr()
@@ -281,7 +281,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render_widget
     def gene_body_plot():
-        if input.gene() not in genes:
+        if input.gene() not in sorted_genes:
             return
         fig = make_subplots(rows=1, cols=3)
         body_data = filtered_body()
@@ -383,7 +383,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render_widget
     def tss_plot():
-        if input.gene() not in genes:
+        if input.gene() not in sorted_genes:
             return
         fig = make_subplots(rows=1, cols=3)
         tss_data = filtered_tss()
@@ -443,5 +443,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_yaxes(title_text="mCG (%)", range=[0, 100], row=1, col=2)
         fig.update_yaxes(title_text="hmCG (%)", range=[0, 100], row=1, col=3)
         return fig
+
 
 app = App(app_ui, server)
