@@ -77,13 +77,13 @@ app_ui = ui.page_sidebar(
             "gene", 
             "Gene", 
             sorted_genes,
-            selected="Shh"
+            selected="Cx3cr1"
         ),
         ui.input_selectize(
             "altGene", 
             "Second Gene", 
             sorted_genes,
-            selected=None
+            selected="Aldh1l1"
         ),
         ui.input_select(
             "filter", 
@@ -463,7 +463,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                                 row=1, col=position)
             position += 1
         fig.update_layout(
-            title = "Gene Body Methylation",
+            title = "Gene Body Methylation: " + input.gene(),
             showlegend = False,
             title_font = dict(
                 size = 24,
@@ -584,7 +584,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                                 row=1, col=position)
             position += 1
         fig.update_layout(
-            title = "Promoter Methylation",
+            title = "Promoter Methylation: " + input.gene(),
             showlegend = False,
             title_font = dict(
                 size = 24,
@@ -604,5 +604,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
         return fig
+
 
 app = App(app_ui, server)
