@@ -236,7 +236,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             fontcolor = "#000000"
             papercolor = "#ffffff"
         else:
-            bgcolor = "#CECECE"
+            bgcolor = "#B9B9B9"
             fontcolor = "#ffffff"
             papercolor = "#252525"
         if input.filter() == "1":
@@ -305,7 +305,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             fontcolor = "#000000"
             papercolor = "#ffffff"
         else:
-            bgcolor = "#CECECE"
+            bgcolor = "#B9B9B9"
             fontcolor = "#ffffff"
             papercolor = "#252525"
         if input.filter() == "1":
@@ -410,11 +410,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         body_data = filtered_body()
         position=1
         if mode == "light":
-            bgcolor = "#c2c2c2"
+            bgcolor = "#e4e4e4"
             fontcolor = "#000000"
             papercolor = "#ffffff"
         else:
-            bgcolor = "#4e4e4e"
+            bgcolor = "#B9B9B9"
             fontcolor = "#ffffff"
             papercolor = "#252525"
         for comp in body_data['COMP'].unique():
@@ -531,11 +531,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         tss_data = filtered_tss()
         position=1
         if mode == "light":
-            bgcolor = "#c2c2c2"
+            bgcolor = "#e4e4e4"
             fontcolor = "#000000"
             papercolor = "#ffffff"
         else:
-            bgcolor = "#4e4e4e"
+            bgcolor = "#B9B9B9"
             fontcolor = "#ffffff"
             papercolor = "#252525"
         for comp in tss_data['COMP'].unique():
