@@ -75,7 +75,7 @@ app_ui = ui.page_sidebar(
     ui.sidebar(
         ui.input_selectize(
             "gene", 
-            "Gene", 
+            "First Gene", 
             sorted_genes,
             selected="Cx3cr1"
         ),
@@ -149,12 +149,21 @@ app_ui = ui.page_sidebar(
             )
         ),
         ui.nav_panel(
-            "Gene Methylation",
+            "First Gene Methylation",
             ui.layout_columns(
                 output_widget("gene_body_plot")
             ),
             ui.layout_columns(
                 output_widget("tss_plot")
+            )
+        ),
+        ui.nav_panel(
+            "Second Gene Methylation",
+            ui.layout_columns(
+                output_widget("gene_body_plot2")
+            ),
+            ui.layout_columns(
+                output_widget("tss_plot2")
             )
         )
     )
@@ -194,40 +203,44 @@ def server(input: Inputs, output: Outputs, session: Session):
         data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
         data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
         sorted_data = data.sort_values(['LINE', 'SEX', 'AGE'])
-        if input.filter() == "1":
-            outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", input.gene(), input.altGene())]
-            return outputData
-        if input.filter() == "2":
-            outputData = sorted_data.loc[sorted_data["SEX"].isin(input.sex()), ("SEX", "LINE", input.gene(), input.altGene())]
-            return outputData
-        if input.filter() == "3":
-            outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("LINE", input.gene(), input.altGene())]
-            return outputData
-        if input.filter() == "4":
-            outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", input.gene(), input.altGene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData["AGE_SEX"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-            return outputData
-        if input.filter() == "5":
-            outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", input.gene(), input.altGene())]
-            outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-            outputData["AGE_LINE"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-            return outputData
-        if input.filter() == "6":
-            outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("SEX", "LINE", input.gene(), input.altGene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData["LINE_SEX"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-            return outputData
-        if input.filter() == "7":
-            outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", input.gene(), input.altGene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-            outputData["ALL"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-            return outputData
+        match input.filter():
+            case "1":
+                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["AGE"]
+                return outputData
+            case "2":
+                outputData = sorted_data.loc[sorted_data["SEX"].isin(input.sex()), ("SEX", "LINE", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["SEX"]
+                return outputData
+            case "3":
+                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("LINE", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["LINE"]
+                return outputData
+            case "4":
+                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
+                return outputData
+            case "5":
+                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
+                return outputData
+            case "6":
+                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("SEX", "LINE", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
+                return outputData
+            case "7":
+                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
+                return outputData
 
     @render_widget
     def expression_plot():
-        if input.altGene() not in sorted_genes:
+        if input.gene() not in sorted_genes:
             return
         fig = go.Figure()
         data = filtered_expr()
@@ -239,41 +252,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             bgcolor = "#B9B9B9"
             fontcolor = "#ffffff"
             papercolor = "#252525"
-        if input.filter() == "1":
-            for group in data['AGE'].unique():
-                fig.add_trace(go.Box(y = data[data['AGE'] == group][input.gene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "2":
-            for group in data['SEX'].unique():
-                fig.add_trace(go.Box(y = data[data['SEX'] == group][input.gene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "3":
-            for group in data['LINE'].unique():
-                fig.add_trace(go.Box(y = data[data['LINE'] == group][input.gene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "4":
-            for group in data['AGE_SEX'].unique():
-                fig.add_trace(go.Box(y = data[data['AGE_SEX'] == group][input.gene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "5":
-            for group in data['AGE_LINE'].unique():
-                fig.add_trace(go.Box(y = data[data['AGE_LINE'] == group][input.gene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "6":
-            for group in data['LINE_SEX'].unique():
-                fig.add_trace(go.Box(y = data[data['LINE_SEX'] == group][input.gene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "7":
-            for group in data['ALL'].unique():
-                fig.add_trace(go.Box(y = data[data['ALL'] == group][input.gene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
+        for group in data['GROUP'].unique():
+            fig.add_trace(go.Box(y = data[data['GROUP'] == group][input.gene()],
+                boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
+                pointpos = 0, name = group, marker_color=color_map[group]))
         fig.update_layout(
             title=input.gene(),
             title_font = dict(
@@ -308,41 +290,10 @@ def server(input: Inputs, output: Outputs, session: Session):
             bgcolor = "#B9B9B9"
             fontcolor = "#ffffff"
             papercolor = "#252525"
-        if input.filter() == "1":
-            for group in data['AGE'].unique():
-                fig.add_trace(go.Box(y = data[data['AGE'] == group][input.altGene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "2":
-            for group in data['SEX'].unique():
-                fig.add_trace(go.Box(y = data[data['SEX'] == group][input.altGene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "3":
-            for group in data['LINE'].unique():
-                fig.add_trace(go.Box(y = data[data['LINE'] == group][input.altGene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "4":
-            for group in data['AGE_SEX'].unique():
-                fig.add_trace(go.Box(y = data[data['AGE_SEX'] == group][input.altGene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "5":
-            for group in data['AGE_LINE'].unique():
-                fig.add_trace(go.Box(y = data[data['AGE_LINE'] == group][input.altGene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "6":
-            for group in data['LINE_SEX'].unique():
-                fig.add_trace(go.Box(y = data[data['LINE_SEX'] == group][input.altGene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
-        elif input.filter() == "7":
-            for group in data['ALL'].unique():
-                fig.add_trace(go.Box(y = data[data['ALL'] == group][input.altGene()],
-                                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                                     pointpos = 0, name = group, marker_color=color_map[group]))
+        for group in data['GROUP'].unique():
+            fig.add_trace(go.Box(y = data[data['GROUP'] == group][input.altGene()],
+                boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
+                pointpos = 0, name = group, marker_color=color_map[group]))
         fig.update_layout(
             title=input.altGene(),
             title_font = dict(
@@ -365,42 +316,46 @@ def server(input: Inputs, output: Outputs, session: Session):
     
     @reactive.Calc
     def filtered_body() -> pd.DataFrame:
-        gene_corr = pq.read_table('ALL_GENE_BODY_PER_SAMPLE_TRANSPOSED_FINAL.parquet', columns=["AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
+        gene_corr = pq.read_table('ALL_GENE_BODY_PER_SAMPLE_TRANSPOSED_FINAL.parquet', columns=["AGE", "SEX", "LINE", "COMP", input.gene(), input.altGene()]).to_pandas()
         gene_corr["AGE"] = pd.Categorical(gene_corr["AGE"], categories=ages, ordered=True)
         gene_corr["SEX"] = pd.Categorical(gene_corr["SEX"], categories=sexes, ordered=True)
         gene_corr["LINE"] = pd.Categorical(gene_corr["LINE"], categories=lines, ordered=True)
         gene_corr["COMP"] = pd.Categorical(gene_corr["COMP"], categories=comp_order, ordered=True)
         sorted_body = gene_corr.sort_values(['LINE', 'SEX', 'AGE', 'COMP'])
-        if input.filter() == "1":
-            outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-            return outputData
-        if input.filter() == "2":
-            outputData = sorted_body.loc[sorted_body["SEX"].isin(input.sex()), ("SEX", "LINE", "COMP", input.gene())]
-            return outputData
-        if input.filter() == "3":
-            outputData = sorted_body.loc[sorted_body["LINE"].isin(input.line()), ("LINE", "COMP", input.gene())]
-            return outputData
-        if input.filter() == "4":
-            outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData["AGE_SEX"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-            return outputData
-        if input.filter() == "5":
-            outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-            outputData["AGE_LINE"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-            return outputData
-        if input.filter() == "6":
-            outputData = sorted_body.loc[sorted_body["LINE"].isin(input.line()), ("SEX", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData["LINE_SEX"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-            return outputData
-        if input.filter() == "7":
-            outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-            outputData["ALL"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-            return outputData
+        match input.filter():
+            case "1":
+                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["AGE"]
+                return outputData
+            case "2":
+                outputData = sorted_body.loc[sorted_body["SEX"].isin(input.sex()), ("SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["SEX"]
+                return outputData
+            case "3":
+                outputData = sorted_body.loc[sorted_body["LINE"].isin(input.line()), ("LINE", "COMP", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["LINE"]
+                return outputData
+            case "4":
+                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
+                return outputData
+            case "5":
+                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
+                return outputData
+            case "6":
+                outputData = sorted_body.loc[sorted_body["LINE"].isin(input.line()), ("SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
+                return outputData
+            case "7":
+                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
+                return outputData
 
     @render_widget
     def gene_body_plot():
@@ -419,48 +374,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             papercolor = "#252525"
         for comp in body_data['COMP'].unique():
             comp_data = body_data[body_data['COMP'] == comp]
-            if input.filter() == "1":
-                for group in comp_data['AGE'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['AGE'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "2":
-                for group in comp_data['SEX'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['SEX'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "3":
-                for group in comp_data['LINE'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['LINE'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "4":
-                for group in comp_data['AGE_SEX'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['AGE_SEX'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "5":
-                for group in comp_data['AGE_LINE'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['AGE_LINE'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "6":
-                for group in comp_data['LINE_SEX'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['LINE_SEX'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "7":
-                for group in comp_data['ALL'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['ALL'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
+            for group in comp_data['GROUP'].unique():
+                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()],
+                    boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
+                    pointpos = 0, name = group, marker_color=color_map[group]),
+                    row=1, col=position)
             position += 1
         fig.update_layout(
             title = "Gene Body Methylation: " + input.gene(),
@@ -484,44 +402,93 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
         return fig
 
+    @render_widget
+    def gene_body_plot2():
+        if input.altGene() not in sorted_genes:
+            return
+        fig = make_subplots(rows=1, cols=3)
+        body_data = filtered_body()
+        position=1
+        if mode == "light":
+            bgcolor = "#e4e4e4"
+            fontcolor = "#000000"
+            papercolor = "#ffffff"
+        else:
+            bgcolor = "#B9B9B9"
+            fontcolor = "#ffffff"
+            papercolor = "#252525"
+        for comp in body_data['COMP'].unique():
+            comp_data = body_data[body_data['COMP'] == comp]
+            for group in comp_data['GROUP'].unique():
+                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.altGene()],
+                    boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
+                    pointpos = 0, name = group, marker_color=color_map[group]),
+                    row=1, col=position)
+            position += 1
+        fig.update_layout(
+            title = "Gene Body Methylation: " + input.altGene(),
+            showlegend = False,
+            title_font = dict(
+                size = 24,
+                textcase = "upper",
+                weight = "bold",
+                color = fontcolor
+            ),
+            font = dict(
+                color = fontcolor
+            ),
+            paper_bgcolor = papercolor,
+            plot_bgcolor = bgcolor,
+            margin=dict(t=100)
+        )
+        # range=[0, 100]
+        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
+        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
+        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
+        return fig
+
     @reactive.Calc
     def filtered_tss() -> pd.DataFrame:
-        tss_corr = pq.read_table('ALL_TSS_PER_SAMPLE_TRANSPOSED.parquet', columns=["AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
+        tss_corr = pq.read_table('ALL_TSS_PER_SAMPLE_TRANSPOSED.parquet', columns=["AGE", "SEX", "LINE", "COMP", input.gene(), input.altGene()]).to_pandas()
         tss_corr["AGE"] = pd.Categorical(tss_corr["AGE"], categories=ages, ordered=True)
         tss_corr["SEX"] = pd.Categorical(tss_corr["SEX"], categories=sexes, ordered=True)
         tss_corr["LINE"] = pd.Categorical(tss_corr["LINE"], categories=lines, ordered=True)
         tss_corr["COMP"] = pd.Categorical(tss_corr["COMP"], categories=comp_order, ordered=True)
         sorted_tss = tss_corr.sort_values(['LINE', 'SEX', 'AGE', 'COMP'])
-        if input.filter() == "1":
-            outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-            return outputData
-        if input.filter() == "2":
-            outputData = sorted_tss.loc[sorted_tss["SEX"].isin(input.sex()), ("SEX", "LINE", "COMP", input.gene())]
-            return outputData
-        if input.filter() == "3":
-            outputData = sorted_tss.loc[sorted_tss["LINE"].isin(input.line()), ("LINE", "COMP", input.gene())]
-            return outputData
-        if input.filter() == "4":
-            outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData["AGE_SEX"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-            return outputData
-        if input.filter() == "5":
-            outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-            outputData["AGE_LINE"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-            return outputData
-        if input.filter() == "6":
-            outputData = sorted_tss.loc[sorted_tss["LINE"].isin(input.line()), ("SEX", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData["LINE_SEX"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-            return outputData
-        if input.filter() == "7":
-            outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-            outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-            outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-            outputData["ALL"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-            return outputData
+        match input.filter():
+            case "1":
+                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["AGE"]
+                return outputData
+            case "2":
+                outputData = sorted_tss.loc[sorted_tss["SEX"].isin(input.sex()), ("SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["SEX"]
+                return outputData
+            case "3":
+                outputData = sorted_tss.loc[sorted_tss["LINE"].isin(input.line()), ("LINE", "COMP", input.gene(), input.altGene())]
+                outputData["GROUP"] = outputData["LINE"]
+                return outputData
+            case "4":
+                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
+                return outputData
+            case "5":
+                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
+                return outputData
+            case "6":
+                outputData = sorted_tss.loc[sorted_tss["LINE"].isin(input.line()), ("SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
+                return outputData
+            case "7":
+                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene(), input.altGene())]
+                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
+                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
+                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
+                return outputData
 
     @render_widget
     def tss_plot():
@@ -540,48 +507,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             papercolor = "#252525"
         for comp in tss_data['COMP'].unique():
             comp_data = tss_data[tss_data['COMP'] == comp]
-            if input.filter() == "1":
-                for group in comp_data['AGE'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['AGE'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "2":
-                for group in comp_data['SEX'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['SEX'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "3":
-                for group in comp_data['LINE'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['LINE'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "4":
-                for group in comp_data['AGE_SEX'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['AGE_SEX'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "5":
-                for group in comp_data['AGE_LINE'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['AGE_LINE'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "6":
-                for group in comp_data['LINE_SEX'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['LINE_SEX'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
-            elif input.filter() == "7":
-                for group in comp_data['ALL'].unique():
-                    fig.add_trace(go.Box(y = comp_data[comp_data['ALL'] == group][input.gene()],
-                                        boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                                        pointpos = 0, name = group, marker_color=color_map[group]),
-                                row=1, col=position)
+            for group in comp_data['GROUP'].unique():
+                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()],
+                    boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
+                    pointpos = 0, name = group, marker_color=color_map[group]),
+                    row=1, col=position)
             position += 1
         fig.update_layout(
             title = "Promoter Methylation: " + input.gene(),
@@ -605,5 +535,49 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
         return fig
 
-
+    @render_widget
+    def tss_plot2():
+        if input.altGene() not in sorted_genes:
+            return
+        fig = make_subplots(rows=1, cols=3)
+        tss_data = filtered_tss()
+        position=1
+        if mode == "light":
+            bgcolor = "#e4e4e4"
+            fontcolor = "#000000"
+            papercolor = "#ffffff"
+        else:
+            bgcolor = "#B9B9B9"
+            fontcolor = "#ffffff"
+            papercolor = "#252525"
+        for comp in tss_data['COMP'].unique():
+            comp_data = tss_data[tss_data['COMP'] == comp]
+            for group in comp_data['GROUP'].unique():
+                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.altGene()],
+                    boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
+                    pointpos = 0, name = group, marker_color=color_map[group]),
+                    row=1, col=position)
+            position += 1
+        fig.update_layout(
+            title = "Promoter Methylation: " + input.altGene(),
+            showlegend = False,
+            title_font = dict(
+                size = 24,
+                textcase = "upper",
+                weight = "bold",
+                color = fontcolor
+            ),
+            font = dict(
+                color = fontcolor
+            ),
+            paper_bgcolor = papercolor,
+            plot_bgcolor = bgcolor,
+            margin=dict(t=100)
+        )
+        # range=[0, 100]
+        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
+        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
+        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
+        return fig
+    
 app = App(app_ui, server)
