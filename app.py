@@ -507,6 +507,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             fontcolor = "#ffffff"
             papercolor = "#252525"
 
+        legendKey = [False, False, True]
+
         for comp in corr_data['COMP'].unique():
             comp_data = corr_data[corr_data['COMP'] == comp]
 
@@ -531,7 +533,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                         y=y,
                         name=group,
                         marker_color=color_map[group],
-                        mode="markers"
+                        mode="markers",
+                        legendgroup="test",
+                        showlegend=legendKey[position-1]
                     ),
                     row=1,
                     col=position
@@ -559,7 +563,8 @@ def server(input: Inputs, output: Outputs, session: Session):
                         y=y_fit,
                         mode="lines",
                         line=dict(color="black", width=2),
-                        name="Trendline"
+                        name="Trendline",
+                        showlegend=False
                     ),
                     row=1,
                     col=position
@@ -569,7 +574,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         fig.update_layout(
             title="Gene Body Correlation: " + input.gene(),
-            showlegend=False,
+            showlegend=True,
             title_font=dict(size=24, weight="bold", color=fontcolor),
             font=dict(color=fontcolor),
             paper_bgcolor=papercolor,
@@ -649,6 +654,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             fontcolor = "#ffffff"
             papercolor = "#252525"
 
+        legendKey = [False, False, True]
+        
         for comp in corr_data['COMP'].unique():
             comp_data = corr_data[corr_data['COMP'] == comp]
 
@@ -673,7 +680,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                         y=y,
                         name=group,
                         marker_color=color_map[group],
-                        mode="markers"
+                        mode="markers",
+                        legendgroup="test",
+                        showlegend=legendKey[position-1]
                     ),
                     row=1,
                     col=position
@@ -701,7 +710,8 @@ def server(input: Inputs, output: Outputs, session: Session):
                         y=y_fit,
                         mode="lines",
                         line=dict(color="black", width=2),
-                        name="Trendline"
+                        name="Trendline",
+                        showlegend=False
                     ),
                     row=1,
                     col=position
@@ -711,7 +721,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         fig.update_layout(
             title="Promoter Correlation: " + input.gene(),
-            showlegend=False,
+            showlegend=True,
             title_font=dict(size=24, weight="bold", color=fontcolor),
             font=dict(color=fontcolor),
             paper_bgcolor=papercolor,
