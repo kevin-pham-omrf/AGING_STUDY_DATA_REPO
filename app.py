@@ -130,8 +130,8 @@ app_ui = ui.page_sidebar(
             ),
         ),
         ui.download_button("download_expr", "Download Expression Data"),
-        ui.download_button("download_gene", "Download Gene Body Modificaiton Data"),
-        ui.download_button("download_tss", "Download Promoter Modificaiton Data"),
+        ui.download_button("download_gene", "Download Gene Body Modification Data"),
+        ui.download_button("download_tss", "Download Promoter Modification Data"),
         ui.input_action_button("toggle_dark", "Toggle Dark Mode")
     ),
     ui.page_navbar(
@@ -144,22 +144,27 @@ app_ui = ui.page_sidebar(
         ui.nav_panel(
             "Gene DNA Modifications",
             ui.layout_columns(
-                output_widget("gene_body_plot")
+                output_widget("tss_plot")
             ),
             ui.layout_columns(
-                output_widget("tss_plot")
+                output_widget("gene_body_plot")
             )
         ),
         ui.nav_panel(
             "Correlation Plots",
             ui.layout_columns(
-                output_widget("gene_corr_plot")
+                output_widget("tss_corr_plot")
             ),
             ui.layout_columns(
-                output_widget("tss_corr_plot")
+                output_widget("gene_corr_plot")
             )
+            
         )
-    )
+    ),
+    ui.hr(),
+    ui.tags.footer("The promoter region is defined as 500 bases upstream to 100 bases downstream of the TSS."),
+    ui.tags.footer("The gene body is defined as the TSS to the TES."),
+    ui.tags.footer("The study associated with this data can be found here: .")
 )
 
 def server(input: Inputs, output: Outputs, session: Session):
@@ -188,10 +193,10 @@ def server(input: Inputs, output: Outputs, session: Session):
         else:
             ui.update_dark_mode("light")
             mode = "light"
-    
+
     @reactive.Calc
     def filtered_expr() -> pd.DataFrame:
-        data = pq.read_table('ALL_RPKM_LABELED_FILTERED.parquet', columns=["AGE", "SEX", "LINE", input.gene()]).to_pandas()
+        data = pq.read_table('ALL_TPM_LABELED_FILTERED.parquet', columns=["AGE", "SEX", "LINE", input.gene()]).to_pandas()
         data["AGE"] = pd.Categorical(data["AGE"], categories=ages, ordered=True)
         data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
         data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
@@ -237,7 +242,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             return
         fig = go.Figure()
         data = filtered_expr()
-        if mode == "light":
+        if not input.toggle_dark():
             bgcolor = "#e4e4e4"
             fontcolor = "#000000"
             papercolor = "#ffffff"
@@ -260,7 +265,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             font = dict(
                 color = fontcolor
             ),
-            yaxis_title = "RPKM",
+            yaxis_title = "TPM",
             xaxis_title = "",
             showlegend = False,
             paper_bgcolor = papercolor,
@@ -319,7 +324,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig = make_subplots(rows=1, cols=3)
         body_data = filtered_body()
         position=1
-        if mode == "light":
+        if not input.toggle_dark():
             bgcolor = "#e4e4e4"
             fontcolor = "#000000"
             papercolor = "#ffffff"
@@ -330,7 +335,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         for comp in body_data['COMP'].unique():
             comp_data = body_data[body_data['COMP'] == comp]
             for group in comp_data['GROUP'].unique():
-                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()],
+                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()].clip(lower=0),
                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
                     pointpos = 0, name = group, marker_color=color_map[group]),
                     row=1, col=position)
@@ -351,7 +356,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             plot_bgcolor = bgcolor,
             margin=dict(t=100)
         )
-        # range=[0, 100]
         fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
         fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
@@ -407,7 +411,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig = make_subplots(rows=1, cols=3)
         tss_data = filtered_tss()
         position=1
-        if mode == "light":
+        if not input.toggle_dark():
             bgcolor = "#e4e4e4"
             fontcolor = "#000000"
             papercolor = "#ffffff"
@@ -418,7 +422,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         for comp in tss_data['COMP'].unique():
             comp_data = tss_data[tss_data['COMP'] == comp]
             for group in comp_data['GROUP'].unique():
-                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()],
+                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()].clip(lower=10),
                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
                     pointpos = 0, name = group, marker_color=color_map[group]),
                     row=1, col=position)
@@ -444,12 +448,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
         return fig
-    
+
     @reactive.Calc
     def filtered_gene_corr() -> pd.DataFrame:
-        rpkm_corr = pq.read_table('ALL_RPKM_DATA_FILTERED_T_v2.parquet', columns=["gene", "AGE", "SEX", "LINE", input.gene()]).to_pandas()
+        rpkm_corr = pq.read_table('ALL_TPM_LABELED_FILTERED.parquet', columns=["geneid", "AGE", "SEX", "LINE", input.gene()]).to_pandas()
         gene_corr = pq.read_table('ALL_GENE_BODY_PER_SAMPLE_T_v2.parquet', columns=["gene", "AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
-        data = pd.merge(rpkm_corr, gene_corr, on = ['gene', 'AGE', 'SEX', 'LINE'])
+        rpkm_corr['geneid'] = rpkm_corr['geneid'].astype(str)
+        gene_corr['gene'] = gene_corr['gene'].astype(str)
+
+        data = pd.merge(rpkm_corr, gene_corr, left_on = ['geneid', 'AGE', 'SEX', 'LINE'], right_on = ['gene', 'AGE', 'SEX', 'LINE'])
         data["AGE"] = pd.Categorical(data["AGE"], categories=ages, ordered=True)
         data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
         data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
@@ -498,7 +505,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         corr_data = filtered_gene_corr()
         position = 1
 
-        if mode == "light":
+        if not input.toggle_dark():
             bgcolor = "#e4e4e4"
             fontcolor = "#000000"
             papercolor = "#ffffff"
@@ -575,28 +582,31 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_layout(
             title="Gene Body Correlation: " + input.gene(),
             showlegend=True,
-            title_font=dict(size=24, weight="bold", color=fontcolor),
+            title_font=dict(size=24, textcase = "upper", weight="bold", color=fontcolor),
             font=dict(color=fontcolor),
             paper_bgcolor=papercolor,
             plot_bgcolor=bgcolor,
-            margin=dict(t=100)
+            margin=dict(t=100),
+            height=600
         )
 
         fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
         fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
 
-        fig.update_xaxes(type="log", title_text="log (RPKM)", row=1, col=1)
-        fig.update_xaxes(type="log", title_text="log (RPKM)", row=1, col=2)
-        fig.update_xaxes(type="log", title_text="log (RPKM)", row=1, col=3)
+        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=1)
+        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=2)
+        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=3)
 
         return fig
-    
+
     @reactive.Calc
     def filtered_tss_corr() -> pd.DataFrame:
-        rpkm_corr = pq.read_table('ALL_RPKM_DATA_FILTERED_T_v2.parquet', columns=["gene", "AGE", "SEX", "LINE", input.gene()]).to_pandas()
+        rpkm_corr = pq.read_table('ALL_TPM_LABELED_FILTERED.parquet', columns=["geneid", "AGE", "SEX", "LINE", input.gene()]).to_pandas()
         tss_corr = pq.read_table('ALL_TSS_PER_SAMPLE_T_v2.parquet', columns=["gene", "AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
-        data = pd.merge(rpkm_corr, tss_corr, on = ['gene', 'AGE', 'SEX', 'LINE'])
+        rpkm_corr['geneid'] = rpkm_corr['geneid'].astype(str)
+        tss_corr['gene'] = tss_corr['gene'].astype(str)
+        data = pd.merge(rpkm_corr, tss_corr, left_on = ['geneid', 'AGE', 'SEX', 'LINE'], right_on = ['gene', 'AGE', 'SEX', 'LINE'])
         data["AGE"] = pd.Categorical(data["AGE"], categories=ages, ordered=True)
         data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
         data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
@@ -645,7 +655,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         corr_data = filtered_tss_corr()
         position = 1
 
-        if mode == "light":
+        if not input.toggle_dark():
             bgcolor = "#e4e4e4"
             fontcolor = "#000000"
             papercolor = "#ffffff"
@@ -655,7 +665,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             papercolor = "#252525"
 
         legendKey = [False, False, True]
-        
+
         for comp in corr_data['COMP'].unique():
             comp_data = corr_data[corr_data['COMP'] == comp]
 
@@ -722,20 +732,21 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_layout(
             title="Promoter Correlation: " + input.gene(),
             showlegend=True,
-            title_font=dict(size=24, weight="bold", color=fontcolor),
+            title_font=dict(size=24, textcase = "upper", weight="bold", color=fontcolor),
             font=dict(color=fontcolor),
             paper_bgcolor=papercolor,
             plot_bgcolor=bgcolor,
-            margin=dict(t=100)
+            margin=dict(t=100),
+            height=600
         )
 
         fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
         fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
 
-        fig.update_xaxes(type="log", title_text="log (RPKM)", row=1, col=1)
-        fig.update_xaxes(type="log", title_text="log (RPKM)", row=1, col=2)
-        fig.update_xaxes(type="log", title_text="log (RPKM)", row=1, col=3)
+        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=1)
+        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=2)
+        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=3)
 
         return fig
     
