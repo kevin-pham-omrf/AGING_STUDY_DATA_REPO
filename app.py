@@ -594,9 +594,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
 
-        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=1)
-        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=2)
-        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=3)
+        fig.update_xaxes(type="log", title_text="TPM", row=1, col=1)
+        fig.update_xaxes(type="log", title_text="TPM", row=1, col=2)
+        fig.update_xaxes(type="log", title_text="TPM", row=1, col=3)
 
         return fig
 
@@ -744,9 +744,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
         fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
 
-        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=1)
-        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=2)
-        fig.update_xaxes(type="log", title_text="log (TPM)", row=1, col=3)
+        fig.update_xaxes(type="log", title_text="TPM", row=1, col=1)
+        fig.update_xaxes(type="log", title_text="TPM", row=1, col=2)
+        fig.update_xaxes(type="log", title_text="TPM", row=1, col=3)
 
         return fig
     
