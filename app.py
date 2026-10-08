@@ -1,11 +1,14 @@
 import ctypes
+from pathlib import Path
 import pyarrow.parquet as pq
 import pandas as pd
+import plotly
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from htmltools import HTMLDependency
 from shiny import App, Inputs, Outputs, Session, reactive, render, req, ui
+from shiny.render.renderer import Renderer
 from shiny.types import SafeException
-from shinywidgets import output_widget, render_widget
 from scipy.stats import linregress
 import numpy as np
 
@@ -142,6 +145,70 @@ def theme(dark):
         return "#B9B9B9", "#ffffff", "#252525"
     return "#e4e4e4", "#000000", "#ffffff"
 
+# Figures are built as plain dicts and drawn by plotly.js in the browser. Building
+# plotly.graph_objects figures and sending them as widgets took ~0.6 s per plot, all of
+# it blocking every session; plain dicts take a few milliseconds.
+def base_layout(fig):
+    """Default layout of `fig` (template and subplot positions included) as a dict.
+
+    Built once with plotly so the plots look the same as plotly-built figures. The
+    template margins match what shinywidgets used.
+    """
+    fig.layout.template.layout.margin = dict(l=16, t=32, r=16, b=16)
+    return fig.to_plotly_json()["layout"]
+
+single_layout = base_layout(go.Figure())
+three_panel_layout = base_layout(make_subplots(rows=1, cols=3))
+
+def build_layout(base, **updates):
+    """Copy `base`, merging dict values one level deep (e.g. adding an axis title)."""
+    layout = dict(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(layout.get(key), dict):
+            layout[key] = {**layout[key], **value}
+        else:
+            layout[key] = value
+    return layout
+
+def panel_axes(position):
+    """Axis references for a trace in panel 1-3 of a three-panel figure."""
+    suffix = "" if position == 1 else str(position)
+    return {"xaxis": "x" + suffix, "yaxis": "y" + suffix}
+
+def json_values(values):
+    """Floats as a JSON-safe list; NaN becomes None, which plotly.js treats as missing."""
+    return [None if v != v else v for v in np.asarray(values, dtype=float).tolist()]
+
+def title_font(color):
+    return dict(size = 24, textcase = "upper", weight = "bold", color = color)
+
+def figure(data, layout):
+    # Unless the height is fixed, fill the output container and follow its size
+    # (as shinywidgets did)
+    config = {} if "height" in layout else {"responsive": True}
+    return {"data": data, "layout": layout, "config": config}
+
+plotly_dependencies = [
+    HTMLDependency(
+        "plotly", plotly.offline.get_plotlyjs_version(),
+        source={"subdir": str(Path(plotly.__file__).parent / "package_data")},
+        script={"src": "plotly.min.js"}, all_files=False),
+    HTMLDependency(
+        "plotly-output", "1.0",
+        source={"subdir": str(Path(__file__).parent / "www")},
+        script={"src": "plotly_output.js"}, stylesheet={"href": "plotly_output.css"}, all_files=False),
+]
+
+def output_plotly(id):
+    """Placeholder for a @render_plotly figure; fills its container like output_widget()."""
+    return ui.fill.as_fillable_container(ui.fill.as_fill_item(
+        ui.div(*plotly_dependencies, id=id, class_="plotly-output")))
+
+class render_plotly(Renderer[dict]):
+    """Send a figure dict ({data, layout, config}) to the browser (see www/plotly_output.js)."""
+    async def transform(self, value: dict) -> dict:
+        return value
+
 app_ui = ui.page_sidebar(
     ui.sidebar(
         ui.input_selectize(
@@ -207,25 +274,25 @@ app_ui = ui.page_sidebar(
         ui.nav_panel(
             "Gene Expression",
             ui.layout_columns(
-                output_widget("expression_plot")
+                output_plotly("expression_plot")
             )
         ),
         ui.nav_panel(
             "Gene DNA Modifications",
             ui.layout_columns(
-                output_widget("tss_plot")
+                output_plotly("tss_plot")
             ),
             ui.layout_columns(
-                output_widget("gene_body_plot")
+                output_plotly("gene_body_plot")
             )
         ),
         ui.nav_panel(
             "Correlation Plots",
             ui.layout_columns(
-                output_widget("tss_corr_plot")
+                output_plotly("tss_corr_plot")
             ),
             ui.layout_columns(
-                output_widget("gene_corr_plot")
+                output_plotly("gene_corr_plot")
             )
 
         )
@@ -286,34 +353,26 @@ def server(input: Inputs, output: Outputs, session: Session):
         require_gene_in(expr_data, "expression")
         return apply_grouping(expr_data, factors(), selected, [gene()])
 
-    @render_widget
+    @render_plotly
     def expression_plot():
-        fig = go.Figure()
         data = filtered_expr()
         bgcolor, fontcolor, papercolor = theme(dark())
+        traces = []
         for group in data['GROUP'].unique():
-            fig.add_trace(go.Box(y = data[data['GROUP'] == group][gene()],
-                boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                pointpos = 0, name = group, marker_color=color_map[group]))
-        fig.update_layout(
-            title=gene(),
-            title_font = dict(
-                size = 24,
-                textcase = "upper",
-                weight = "bold",
-                color = fontcolor
-            ),
-            font = dict(
-                color = fontcolor
-            ),
-            yaxis_title = "TPM",
-            xaxis_title = "",
+            traces.append(dict(type = "box", y = json_values(data[data['GROUP'] == group][gene()]),
+                boxpoints = 'all', jitter = 0.5, marker = dict(line = dict(width=1), color = color_map[group]),
+                line = dict(width=2), pointpos = 0, name = group))
+        layout = build_layout(single_layout,
+            title = dict(text = gene(), font = title_font(fontcolor)),
+            font = dict(color = fontcolor),
+            yaxis = dict(title = dict(text = "TPM")),
+            xaxis = dict(title = dict(text = "")),
             showlegend = False,
             paper_bgcolor = papercolor,
             plot_bgcolor = bgcolor,
-            margin=dict(t=100)
+            margin = dict(t=100)
         )
-        return fig
+        return figure(traces, layout)
 
     @reactive.calc
     def filtered_body() -> pd.DataFrame:
@@ -326,43 +385,34 @@ def server(input: Inputs, output: Outputs, session: Session):
         return apply_grouping(tss_data, factors(), selected, ["COMP", gene()])
 
     def modification_plot(mod_data, title, clip_lower):
-        fig = make_subplots(rows=1, cols=3)
         position=1
         bgcolor, fontcolor, papercolor = theme(dark())
+        traces = []
         for comp in mod_data['COMP'].unique():
             comp_data = mod_data[mod_data['COMP'] == comp]
             for group in comp_data['GROUP'].unique():
-                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][gene()].clip(lower=clip_lower),
-                    boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                    pointpos = 0, name = group, marker_color=color_map[group]),
-                    row=1, col=position)
+                traces.append(dict(type = "box", y = json_values(comp_data[comp_data['GROUP'] == group][gene()].clip(lower=clip_lower)),
+                    boxpoints = 'all', jitter = 0.5, marker = dict(line = dict(width=1), color = color_map[group]),
+                    line = dict(width=1), pointpos = 0, name = group, **panel_axes(position)))
             position += 1
-        fig.update_layout(
-            title = title + gene(),
+        layout = build_layout(three_panel_layout,
+            title = dict(text = title + gene(), font = title_font(fontcolor)),
             showlegend = False,
-            title_font = dict(
-                size = 24,
-                textcase = "upper",
-                weight = "bold",
-                color = fontcolor
-            ),
-            font = dict(
-                color = fontcolor
-            ),
+            font = dict(color = fontcolor),
             paper_bgcolor = papercolor,
             plot_bgcolor = bgcolor,
-            margin=dict(t=100)
+            margin = dict(t=100),
+            yaxis = dict(title = dict(text = "5modCG (%)")),
+            yaxis2 = dict(title = dict(text = "5mCG (%)")),
+            yaxis3 = dict(title = dict(text = "5hmCG (%)"))
         )
-        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
-        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
-        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
-        return fig
+        return figure(traces, layout)
 
-    @render_widget
+    @render_plotly
     def gene_body_plot():
         return modification_plot(filtered_body(), "Gene Body Methylation: ", clip_lower=0)
 
-    @render_widget
+    @render_plotly
     def tss_plot():
         return modification_plot(filtered_tss(), "Promoter Methylation: ", clip_lower=10)
 
@@ -381,9 +431,9 @@ def server(input: Inputs, output: Outputs, session: Session):
         return apply_grouping(data, factors(), selected, [f"{gene()}_x", f"{gene()}_y", "COMP"])
 
     def correlation_plot(corr_data, title):
-        fig = make_subplots(rows=1, cols=3)
         position = 1
         bgcolor, fontcolor, papercolor = theme(dark())
+        traces = []
 
         legendKey = [False, False, True]
 
@@ -405,19 +455,17 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # Floor y values at 0
                 y = np.maximum(y, 0)
 
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=y,
-                        name=group,
-                        marker_color=color_map[group],
-                        mode="markers",
-                        legendgroup="test",
-                        showlegend=legendKey[position-1]
-                    ),
-                    row=1,
-                    col=position
-                )
+                traces.append(dict(
+                    type="scatter",
+                    x=json_values(x),
+                    y=json_values(y),
+                    name=group,
+                    marker=dict(color=color_map[group]),
+                    mode="markers",
+                    legendgroup="test",
+                    showlegend=legendKey[position-1],
+                    **panel_axes(position)
+                ))
 
             # ---- One regression line across all groups ----
             x_all = comp_data[f"{gene()}_x"]
@@ -435,47 +483,41 @@ def server(input: Inputs, output: Outputs, session: Session):
                 y_fit = result.slope * np.log10(x_sorted) + result.intercept
                 y_fit = np.maximum(y_fit, 0)  # keep regression line >=0
 
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_sorted,
-                        y=y_fit,
-                        mode="lines",
-                        line=dict(color="black", width=2),
-                        name="Trendline",
-                        showlegend=False
-                    ),
-                    row=1,
-                    col=position
-                )
+                traces.append(dict(
+                    type="scatter",
+                    x=json_values(x_sorted),
+                    y=json_values(y_fit),
+                    mode="lines",
+                    line=dict(color="black", width=2),
+                    name="Trendline",
+                    showlegend=False,
+                    **panel_axes(position)
+                ))
 
             position += 1
 
-        fig.update_layout(
-            title=title + gene(),
+        log_tpm_axis = dict(type="log", title=dict(text="TPM"))
+        layout = build_layout(three_panel_layout,
+            title=dict(text=title + gene(), font=title_font(fontcolor)),
             showlegend=True,
-            title_font=dict(size=24, textcase = "upper", weight="bold", color=fontcolor),
             font=dict(color=fontcolor),
             paper_bgcolor=papercolor,
             plot_bgcolor=bgcolor,
             margin=dict(t=100),
-            height=600
+            height=600,
+            yaxis=dict(title=dict(text="5modCG (%)")),
+            yaxis2=dict(title=dict(text="5mCG (%)")),
+            yaxis3=dict(title=dict(text="5hmCG (%)")),
+            xaxis=log_tpm_axis, xaxis2=log_tpm_axis, xaxis3=log_tpm_axis
         )
 
-        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
-        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
-        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
+        return figure(traces, layout)
 
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=1)
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=2)
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=3)
-
-        return fig
-
-    @render_widget
+    @render_plotly
     def gene_corr_plot():
         return correlation_plot(filtered_gene_corr(), "Gene Body Correlation: ")
 
-    @render_widget
+    @render_plotly
     def tss_corr_plot():
         return correlation_plot(filtered_tss_corr(), "Promoter Correlation: ")
 
