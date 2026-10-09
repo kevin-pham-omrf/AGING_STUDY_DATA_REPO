@@ -309,17 +309,17 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     selected = {"AGE": input.age, "SEX": input.sex, "LINE": input.line}
 
-    @render.download(filename="gene_expression_data.csv")
+    @render.download_button(filename="gene_expression_data.csv")
     def download_expr():
         outData = filtered_expr()
         yield outData.to_csv(index=False)
 
-    @render.download(filename="gene_body_methylation_data.csv")
+    @render.download_button(filename="gene_body_methylation_data.csv")
     def download_gene():
         outData = filtered_body()
         yield outData.to_csv(index=False)
 
-    @render.download(filename="promoter_methylation_data.csv")
+    @render.download_button(filename="promoter_methylation_data.csv")
     def download_tss():
         outData = filtered_tss()
         yield outData.to_csv(index=False)

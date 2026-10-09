@@ -102,7 +102,5 @@ Both flags are set in the Dockerfile's `CMD`.
 
 ## Known follow-ups
 
-- Shiny 1.8 logs a deprecation warning for `render.download` (three per visitor session). It
-  works, but should move to `render.download_button` before upgrading Shiny.
 - The footer's link to the study is empty.
 - Promoter methylation values are clipped at 10% in the box plots, gene body values at 0%.
