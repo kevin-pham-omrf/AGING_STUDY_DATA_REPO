@@ -13,6 +13,8 @@
 #   TEST_PYTHON  python for the checks; screenshots also need tests/requirements.txt
 #                                                                 (default: CAND_PYTHON)
 #   REF_PORT, CAND_PORT  localhost ports                          (default: 8101, 8102)
+#   CAND_URL     test an app that is already running (e.g. the container) instead of
+#                starting the working tree, e.g. CAND_URL=http://127.0.0.1:8000
 #   WORK         scratch directory for the reference copy, logs and screenshots
 #                                                                 (default: $TMPDIR/aging-app-tests)
 set -u
@@ -24,7 +26,9 @@ TEST_PYTHON=${TEST_PYTHON:-$CAND_PYTHON}
 REF_PORT=${REF_PORT:-8101}
 CAND_PORT=${CAND_PORT:-8102}
 export WORK=${WORK:-${TMPDIR:-/tmp}/aging-app-tests}
-export REF_URL=http://127.0.0.1:$REF_PORT CAND_URL=http://127.0.0.1:$CAND_PORT
+export REF_URL=http://127.0.0.1:$REF_PORT
+cand_external=${CAND_URL:+1}
+export CAND_URL=${CAND_URL:-http://127.0.0.1:$CAND_PORT}
 export PYTHONDONTWRITEBYTECODE=1  # keep __pycache__ out of the repo
 checks=("$@")
 [[ ${#checks[@]} -eq 0 ]] && checks=(plots downloads inputs darkmode page perf)
@@ -36,23 +40,28 @@ paths=$(git -C "$REPO" ls-tree --name-only "$REF_REV" app.py www) || exit 1
 git -C "$REPO" archive "$REF_REV" $paths | tar -x -C "$ref_dir" || exit 1
 for f in "$REPO"/*.parquet "$REPO"/DETECTED_GENES.csv; do ln -s "$f" "$ref_dir/"; done
 echo "reference: $(git -C "$REPO" log --oneline -1 "$REF_REV")"
-echo "candidate: working tree of $REPO"
+if [[ -n $cand_external ]]; then echo "candidate: already running at $CAND_URL"
+else echo "candidate: working tree of $REPO"; fi
 
 (cd "$ref_dir" && exec "$REF_PYTHON" -m shiny run --host 127.0.0.1 --port "$REF_PORT" app.py) > "$WORK/reference.log" 2>&1 &
 ref_pid=$!
-(cd "$REPO" && exec "$CAND_PYTHON" -m shiny run --host 127.0.0.1 --port "$CAND_PORT" app.py) > "$WORK/candidate.log" 2>&1 &
-cand_pid=$!
+cand_pid=
+if [[ -z $cand_external ]]; then
+  (cd "$REPO" && exec "$CAND_PYTHON" -m shiny run --host 127.0.0.1 --port "$CAND_PORT" app.py) > "$WORK/candidate.log" 2>&1 &
+  cand_pid=$!
+fi
 trap 'kill $ref_pid $cand_pid 2>/dev/null; wait 2>/dev/null' EXIT
+rss() { if [[ -n $1 ]]; then echo "$(ps -o rss= -p "$1") KB"; else echo "(not started here)"; fi; }
 
 for _ in $(seq 120); do
   curl -sf -o /dev/null "$REF_URL" && curl -sf -o /dev/null "$CAND_URL" && break
-  kill -0 $ref_pid 2>/dev/null && kill -0 $cand_pid 2>/dev/null || break
+  kill -0 $ref_pid 2>/dev/null && { [[ -z $cand_pid ]] || kill -0 $cand_pid 2>/dev/null; } || break
   sleep 1
 done
 if ! curl -sf -o /dev/null "$REF_URL" || ! curl -sf -o /dev/null "$CAND_URL"; then
-  echo "apps did not start; see $WORK/reference.log and $WORK/candidate.log"; exit 1
+  echo "apps did not start or are not reachable; see $WORK/reference.log and $WORK/candidate.log"; exit 1
 fi
-echo "memory at startup: reference $(ps -o rss= -p $ref_pid) KB, candidate $(ps -o rss= -p $cand_pid) KB"
+echo "memory at startup: reference $(rss $ref_pid), candidate $(rss "$cand_pid")"
 
 cd "$REPO"
 failed=()
@@ -66,7 +75,7 @@ for check in "${checks[@]}"; do
     *) echo "unknown check: $check"; false;;
   esac || failed+=("$check")
 done
-echo "memory after checks: reference $(ps -o rss= -p $ref_pid) KB, candidate $(ps -o rss= -p $cand_pid) KB"
+echo "memory after checks: reference $(rss $ref_pid), candidate $(rss "$cand_pid")"
 
 if [[ ${#failed[@]} -gt 0 ]]; then
   echo "FAILED: ${failed[*]}  (server logs in $WORK)"; exit 1

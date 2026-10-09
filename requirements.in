@@ -1,0 +1,8 @@
+# Direct dependencies of app.py. requirements.txt is generated from this file with
+# pinned versions and hashes for every package (see DEPLOY.md, "Updating dependencies").
+shiny==1.8.0
+plotly==6.9.0
+pandas==2.3.3
+pyarrow==25.0.1
+scipy==1.15.3
+numpy==2.2.6

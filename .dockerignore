@@ -1,0 +1,9 @@
+# Send only what the image needs to the Docker build (keeps .git, tests and local files out)
+*
+!app.py
+!www/
+!requirements.txt
+!DETECTED_GENES.csv
+!ALL_TPM_LABELED_FILTERED.parquet
+!ALL_GENE_BODY_PER_SAMPLE_T_v2.parquet
+!ALL_TSS_PER_SAMPLE_T_v2.parquet

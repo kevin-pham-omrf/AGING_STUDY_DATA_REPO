@@ -27,12 +27,25 @@ reference can be a revision from before the switch to plotly.js.
 Make a venv with the app's requirements, plus `tests/requirements.txt` if you'll run
 `screenshots`:
 
+`requirements.txt` is locked for Python 3.13 (the container's Python), with hashes, so the
+venv needs Python 3.13 (on the OMRF cluster: `module load python/3.13.0`). Install the
+test-only packages in a separate step, because pip requires hashes for everything installed
+together with a hash-locked file:
+
 ```bash
-python3 -m venv /s/ai/$USER/venvs/aging-app
-/s/ai/$USER/venvs/aging-app/bin/pip install -r requirements.txt -r tests/requirements.txt
+python3.13 -m venv /s/ai/$USER/venvs/aging-app
+/s/ai/$USER/venvs/aging-app/bin/pip install --require-hashes -r requirements.txt
+/s/ai/$USER/venvs/aging-app/bin/pip install -r tests/requirements.txt   # for screenshots
 
 CAND_PYTHON=/s/ai/$USER/venvs/aging-app/bin/python tests/run.sh               # default checks
 CAND_PYTHON=/s/ai/$USER/venvs/aging-app/bin/python tests/run.sh screenshots   # needs Chrome
+```
+
+To test an app that is already running, such as the container, set `CAND_URL` instead of
+starting the working tree:
+
+```bash
+CAND_URL=http://127.0.0.1:8000 CAND_PYTHON=/s/ai/$USER/venvs/aging-app/bin/python tests/run.sh
 ```
 
 If the reference revision has different requirements, give it its own venv with `REF_PYTHON`
