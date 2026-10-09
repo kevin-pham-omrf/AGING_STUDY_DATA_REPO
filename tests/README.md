@@ -18,7 +18,7 @@ They answer "did my change alter what users see, or how fast it is?"
 | `genesearch` | Searches genes through the Gene box's server-side search (e.g. "gfa" finds Gfap) | the search doesn't work or the gene list is written into the page |
 | `page` | Checks the page HTML size and that plotly.js and `www/plotly_output.js`/`.css` load after Shiny and are served correctly | page over 200 KB, assets missing or out of order, or any external URL on the page |
 | `perf` | Reports server time per plot, per gene change, and how long a second visitor waits | (report only) |
-| `screenshots` | Renders both apps in headless Chrome, measures page load (time to first plot, main-thread blocking), picks genes by typing in the Gene box, and compares every plot pixel by pixel in 5 scenarios, saving images to `$WORK/shots/` | the candidate's page load blocks the browser for over 2 s at once, or it has a JavaScript error, a missing or squashed plot, or a correlation plot drawn narrower than its container |
+| `screenshots` | Renders both apps in headless Chrome, measures page load (time to first plot, main-thread blocking), picks genes by typing over the current gene in the Gene box, checks that leaving the box without picking keeps the gene, and compares every plot pixel by pixel in 5 scenarios, saving images to `$WORK/shots/` | the candidate's page load blocks the browser for over 2 s at once, typing over the gene doesn't work, leaving the box changes the gene, or it has a JavaScript error, a missing or squashed plot, or a correlation plot drawn narrower than its container |
 
 `plots` handles both ways the app has sent figures (shinywidgets widgets and plain JSON), so the
 reference can be a revision from before the switch to plotly.js.

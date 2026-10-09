@@ -1,6 +1,7 @@
 """Render the reference and candidate apps in headless Chrome and compare screenshots of
 every plot, pixel by pixel, across several scenarios (genes, groupings, dark mode, a gene
-without methylation data), picking genes by typing in the Gene box. Also records page
+without methylation data), picking genes by typing over the current gene in the Gene box,
+and checks that leaving the box without picking keeps the current gene. Also records page
 load time and main-thread blocking, layout details for missing or squashed plots, browser
 console errors, and the drawn width of the correlation plots.
 
@@ -8,7 +9,8 @@ Needs Chrome (CHROME, default /usr/bin/google-chrome) and tests/requirements.txt
 Results go to $WORK/shots/ (report.txt plus PNGs; DIFF__*.png are side-by-side
 reference | candidate | changed pixels). Run via tests/run.sh.
 
-Fails if the candidate's page load blocks the browser for over 2 s at once, or it has a
+Fails if the candidate's page load blocks the browser for over 2 s at once, typing over the
+current gene doesn't find genes, leaving the box without picking changes the gene, or it has a
 JavaScript error, a plot that is missing or squashed (other
 than the expected "no data" messages), or a correlation plot drawn narrower than its
 container. Pixel differences from the reference are reported, not failed: some are
@@ -71,31 +73,66 @@ BOX_CHAIN = """(id) => { const out = []; let el = document.getElementById(id);
   } return out; }"""
 
 
-def pick_gene(page, app, gene):
-    """Type into the Gene box and click the matching suggestion, as a visitor would.
+GENE_BOX = "#gene + .selectize-control .selectize-input"
 
-    Logs how long the suggestion took to appear. If it never does, saves a screenshot and
+
+def type_in_gene_box(page, text, backspace_first=False):
+    """Click the Gene box and type, sending key presses to selectize's own text field."""
+    page.locator(GENE_BOX).click()
+    field = page.locator(f"{GENE_BOX} input")
+    if backspace_first:
+        field.press("Backspace")
+    field.press_sequentially(text, delay=50)
+
+
+def pick_gene(page, app, gene):
+    """Type a gene's name in the Gene box (replacing the current gene) and click the suggestion.
+
+    Logs how long the suggestion took. If typing over the current gene doesn't work (the
+    old behaviour), retries with Backspace first; if that fails too, saves a screenshot and
     selects the gene directly so the remaining scenarios can still run.
     """
-    start = time.perf_counter()
-    page.locator("#gene + .selectize-control .selectize-input").click()
-    # While a gene is selected the box is "full" and selectize ignores typed characters;
-    # Backspace removes the current gene first. Key presses go to selectize's text field.
-    field = page.locator("#gene + .selectize-control .selectize-input input")
-    field.press("Backspace")
-    field.press_sequentially(gene, delay=50)
-    try:
-        page.locator(f"#gene + .selectize-control .selectize-dropdown .option[data-value='{gene}']").click(timeout=120000)
-        log(f"[{app}] typed {gene!r} in the Gene box: suggestion clicked after {time.perf_counter() - start:.1f} s")
-    except PWTimeout:
-        page.screenshot(path=OUT / f"PICK_FAILED__{app}__{gene}.png", full_page=True)
-        msg = f"typed {gene!r} in the Gene box: no suggestion after {time.perf_counter() - start:.0f} s"
-        if app == "candidate":
-            fail(msg)
-        else:
-            log(f"[{app}] {msg}; selecting it directly instead")
-        page.keyboard.press("Escape")
-        page.evaluate("(g) => { const s = $('#gene')[0].selectize; s.addOption({value: g, label: g}); s.setValue(g); }", gene)
+    option = page.locator(f"#gene + .selectize-control .selectize-dropdown .option[data-value='{gene}']")
+    for backspace_first, timeout in ((False, 15000), (True, 120000)):
+        start = time.perf_counter()
+        type_in_gene_box(page, gene, backspace_first)
+        try:
+            option.click(timeout=timeout)
+            how = "after Backspace" if backspace_first else "typing over the current gene"
+            log(f"[{app}] typed {gene!r} in the Gene box ({how}): suggestion clicked after "
+                f"{time.perf_counter() - start:.1f} s")
+            return
+        except PWTimeout:
+            msg = (f"typed {gene!r} in the Gene box{' after Backspace' if backspace_first else ''}: "
+                   f"no suggestion after {time.perf_counter() - start:.0f} s")
+            if app == "candidate":
+                fail(msg)
+            else:
+                log(f"[{app}] {msg}")
+            page.keyboard.press("Escape")
+            page.locator("footer").first.click()  # leave the box
+    page.screenshot(path=OUT / f"PICK_FAILED__{app}__{gene}.png", full_page=True)
+    log(f"[{app}] selecting {gene!r} directly instead")
+    page.evaluate("(g) => { const s = $('#gene')[0].selectize; s.addOption({value: g, label: g}); s.setValue(g); }", gene)
+
+
+def check_abandoned_search(page, app):
+    """Typing part of a name and leaving the box must keep the current gene, without
+    sending anything to the server (so the plots stay)."""
+    page.evaluate("""() => { window.__geneSent = [];
+        $(document).on('shiny:inputchanged', e => { if (e.name === 'gene') window.__geneSent.push(e.value); }); }""")
+    before = page.evaluate("() => $('#gene')[0].selectize.getValue()")
+    type_in_gene_box(page, "Gfa")
+    page.wait_for_timeout(1500)
+    page.locator("footer").first.click()  # leave the box without picking
+    page.wait_for_timeout(1500)
+    after = page.evaluate("() => $('#gene')[0].selectize.getValue()")
+    sent = page.evaluate("() => window.__geneSent")
+    plot = page.locator("#expression_plot .main-svg").count() > 0
+    log(f"[{app}] typed 'Gfa' then left the Gene box: box {before!r} -> {after!r}, "
+        f"sent to server: {sent}, expression plot still shown: {plot}")
+    if app == "candidate" and (after != before or sent or not plot):
+        fail("leaving the Gene box without picking a gene changed or cleared the gene")
 
 
 # Main-thread tasks over 50 ms (what makes a page unresponsive), recorded from page start
@@ -137,6 +174,7 @@ with sync_playwright() as p:
         if app == "candidate" and max(tasks, default=0) > 2000:
             fail(f"page load blocked the browser for {max(tasks) / 1000:.1f} s at once")
         settle(page)
+        check_abandoned_search(page, app)
         for name, gene, js in SCENARIOS:
             if gene:
                 pick_gene(page, app, gene)

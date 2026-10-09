@@ -209,6 +209,29 @@ class render_plotly(Renderer[dict]):
     async def transform(self, value: dict) -> dict:
         return value
 
+# selectize ignores typing while its single slot holds a gene, so visitors had to delete
+# the gene first. Instead, the first key press (or Backspace/Delete) takes the gene out
+# without telling the server, so the plots stay while the visitor searches; leaving the
+# box without picking a gene puts it back.
+GENE_TYPE_TO_REPLACE = """function() {
+    var selectize = this, previous = null;
+    selectize.$control[0].addEventListener("keydown", function(e) {
+        var editing = e.key && (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete")
+            && !e.ctrlKey && !e.metaKey && !e.altKey;
+        if (editing && selectize.isFull()) {
+            previous = selectize.getValue();
+            selectize.clear(true);
+        }
+    }, true);
+    selectize.on("change", function() { previous = null; });
+    selectize.on("blur", function() {
+        if (previous !== null && selectize.getValue() === "") {
+            selectize.setValue(previous, true);
+        }
+        previous = null;
+    });
+}"""
+
 app_ui = ui.page_sidebar(
     ui.sidebar(
         # Only the default gene is written into the page; the full list (~25,000 genes)
@@ -218,7 +241,8 @@ app_ui = ui.page_sidebar(
             "gene",
             "Gene",
             ["Cx3cr1"],
-            selected="Cx3cr1"
+            selected="Cx3cr1",
+            options={"onInitialize": ui.js_eval(GENE_TYPE_TO_REPLACE)}
         ),
         ui.input_select(
             "filter",
