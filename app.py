@@ -211,10 +211,13 @@ class render_plotly(Renderer[dict]):
 
 app_ui = ui.page_sidebar(
     ui.sidebar(
+        # Only the default gene is written into the page; the full list (~25,000 genes)
+        # is searched on the server as the visitor types (see update_selectize in
+        # server()). Writing every gene into the page froze the browser on load.
         ui.input_selectize(
             "gene",
             "Gene",
-            sorted_genes,
+            ["Cx3cr1"],
             selected="Cx3cr1"
         ),
         ui.input_select(
@@ -306,6 +309,8 @@ app_ui = ui.page_sidebar(
 def server(input: Inputs, output: Outputs, session: Session):
     # Per-session, so one visitor's toggle doesn't affect anyone else
     dark = reactive.value(False)
+
+    ui.update_selectize("gene", choices=sorted_genes, selected="Cx3cr1", server=True)
 
     selected = {"AGE": input.age, "SEX": input.sex, "LINE": input.line}
 

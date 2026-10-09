@@ -15,9 +15,10 @@ They answer "did my change alter what users see, or how fast it is?"
 | `downloads` | Compares the three CSV downloads over 3 genes × 7 groupings × 2 filter sets | any download differs |
 | `inputs` | Sends forged inputs (unknown gene, wrong types, invalid grouping) and a gene with no methylation data | the candidate shows raw exception text |
 | `darkmode` | Two visitors each click the dark-mode toggle once | one visitor's toggle affects the other's |
-| `page` | Checks that plotly.js and `www/plotly_output.js`/`.css` load after Shiny and are served correctly | assets missing or out of order, or any external URL on the page |
+| `genesearch` | Searches genes through the Gene box's server-side search (e.g. "gfa" finds Gfap) | the search doesn't work or the gene list is written into the page |
+| `page` | Checks the page HTML size and that plotly.js and `www/plotly_output.js`/`.css` load after Shiny and are served correctly | page over 200 KB, assets missing or out of order, or any external URL on the page |
 | `perf` | Reports server time per plot, per gene change, and how long a second visitor waits | (report only) |
-| `screenshots` | Renders both apps in headless Chrome and compares every plot pixel by pixel in 5 scenarios, saving images to `$WORK/shots/` | the candidate has a JavaScript error, a missing or squashed plot, or a correlation plot drawn narrower than its container |
+| `screenshots` | Renders both apps in headless Chrome, measures page load (time to first plot, main-thread blocking), picks genes by typing in the Gene box, and compares every plot pixel by pixel in 5 scenarios, saving images to `$WORK/shots/` | the candidate's page load blocks the browser for over 2 s at once, or it has a JavaScript error, a missing or squashed plot, or a correlation plot drawn narrower than its container |
 
 `plots` handles both ways the app has sent figures (shinywidgets widgets and plain JSON), so the
 reference can be a revision from before the switch to plotly.js.
@@ -86,3 +87,8 @@ that shinywidgets drew at plotly's 700px default width after being redrawn while
 hidden; `4645b3a` draws them full width. The "No data" messages for a gene without methylation
 data are 48px tall in both versions (expected; the width check flags them as narrow but doesn't
 fail on them).
+
+Gene box, `54a78e5` (all 25,114 genes written into the page) vs. server-side gene search,
+2026-10-09, headless Chrome: page load to first plot ~27 s → ~2.2 s; longest main-thread block
+~25 s → ~1 s; page HTML 1.5 MB → 13 KB. Typing a gene shows the suggestion in about 1 s in both.
+All 25 plot screenshots were pixel-identical.

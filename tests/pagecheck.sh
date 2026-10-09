@@ -9,6 +9,11 @@ page=$WORK/candidate_page.html
 status=0
 
 curl -s "$CAND_URL/" > "$page"
+size=$(wc -c < "$page")
+echo "page HTML: $size bytes"
+if [[ $size -gt 200000 ]]; then
+  echo "FAIL: page HTML over 200 KB (is the gene list written into the page again?)"; status=1
+fi
 echo "script tags, in order:"
 grep -o '<script[^>]*src="[^"]*"' "$page" | sed 's/.*src="//; s/"$//' | nl
 

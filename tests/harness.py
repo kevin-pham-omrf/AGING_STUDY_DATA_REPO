@@ -2,7 +2,7 @@
 
 Run via tests/run.sh, which starts both apps and sets REF_URL / CAND_URL.
 
-    python tests/harness.py downloads|inputs|darkmode|perf
+    python tests/harness.py downloads|inputs|darkmode|genesearch|perf
 
 Exits non-zero if a check fails (perf only reports).
 """
@@ -12,6 +12,7 @@ import os
 import random
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 import pandas as pd
@@ -50,7 +51,7 @@ class Client:
         """
         t = time.perf_counter()
         await self.ws.send(json.dumps({"method": method, "data": data}))
-        errors, values, custom, last_idle = {}, {}, [], None
+        errors, values, custom, input_messages, last_idle = {}, {}, [], [], None
         # Shiny may flush several times per update; read until quiet after an idle
         while True:
             try:
@@ -61,9 +62,10 @@ class Client:
             values.update(msg.get("values") or {})
             if "custom" in msg:
                 custom.append(msg["custom"])
+            input_messages += msg.get("inputMessages") or []
             if msg.get("busy") == "idle":
                 last_idle = time.perf_counter()
-        return {"errors": errors, "values": values, "custom": custom,
+        return {"errors": errors, "values": values, "custom": custom, "input_messages": input_messages,
                 "secs": (last_idle or time.perf_counter()) - t}
 
     def download(self, name):
@@ -169,6 +171,35 @@ async def check_darkmode():
     return ok
 
 
+async def check_genesearch():
+    """The Gene box must search the full gene list on the server, not ship it in the page."""
+    genes = pd.read_csv("DETECTED_GENES.csv", header=None)[0].tolist()
+    ok = True
+    for name, url in APPS:
+        page = urllib.request.urlopen(url).read()
+        c = Client()
+        r = await c.open(url)  # the search endpoint belongs to this session; keep it open
+        search = next((m["message"].get("url") for m in r["input_messages"] if m["id"] == "gene"), None)
+        print(f"{name}: page {len(page):,} bytes, {page.count(b'<option')} <option> elements, "
+              f"server-side gene search: {'yes' if search else 'no'}")
+        if name == "candidate" and not search:
+            print("  FAIL: the candidate doesn't search genes on the server")
+            ok = False
+        if name == "candidate" and search:
+            cases = [("gfa", "Gfap"), ("cx3cr", "Cx3cr1"), ("4732440D04Rik", "4732440D04Rik"), (genes[-1], genes[-1])]
+            for query, expected in cases:
+                q = urllib.parse.urlencode({"query": query, "field": '["label"]', "maxop": 1000})
+                found = [x["value"] for x in json.loads(urllib.request.urlopen(f"{url}/{search}&{q}").read())]
+                good = expected in found and all(v in genes for v in found)
+                print(f"  search {query!r}: {len(found)} results, {expected} {'found' if expected in found else 'MISSING'}")
+                ok = ok and good
+        await c.close()
+        if name == "candidate" and page.count(b"<option") > 100:
+            print("  FAIL: the gene list is written into the page")
+            ok = False
+    return ok
+
+
 async def check_perf():
     """Report server time per plot, per gene change, and how long another visitor waits."""
     for name, url in APPS:
@@ -201,7 +232,8 @@ async def check_perf():
     return True
 
 
-CHECKS = {"downloads": check_downloads, "inputs": check_inputs, "darkmode": check_darkmode, "perf": check_perf}
+CHECKS = {"downloads": check_downloads, "inputs": check_inputs, "darkmode": check_darkmode,
+          "genesearch": check_genesearch, "perf": check_perf}
 
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in CHECKS:

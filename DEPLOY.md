@@ -46,6 +46,11 @@ server {
 
     client_max_body_size 1m;   # the app takes no uploads
 
+    # The app sends files uncompressed; plotly.js alone goes from 4.9 MB to 1.5 MB with gzip
+    gzip on;
+    gzip_types text/css application/javascript application/json;
+    gzip_min_length 1024;
+
     location / {
         limit_req zone=aging burst=40 nodelay;      # a page load fetches ~20 files
         proxy_pass http://127.0.0.1:8000;
@@ -69,6 +74,9 @@ Both flags are set in the Dockerfile's `CMD`.
 
 - About 0.6 GB of memory per container, ~15 s to start (all data is loaded into memory), and
   one CPU. Each container runs one app process.
+- Each open visitor session adds about 3 MB, mostly its copy of the gene list for the Gene
+  box's server-side search. At the 200-connection limit that is about 0.6 GB more, within
+  the 1.5 GB cap in `compose.yaml`.
 - A gene change costs ~0.3 s of server time with every plot on screen; in a browser only the
   visible tab's plots are drawn, so usually less. One container comfortably serves a lab-sized
   audience. While one visitor's request is being handled, others wait, so a burst of heavy use

@@ -1,19 +1,22 @@
 """Render the reference and candidate apps in headless Chrome and compare screenshots of
 every plot, pixel by pixel, across several scenarios (genes, groupings, dark mode, a gene
-without methylation data). Also records layout details for missing or squashed plots,
-browser console errors, and the drawn width of the correlation plots.
+without methylation data), picking genes by typing in the Gene box. Also records page
+load time and main-thread blocking, layout details for missing or squashed plots, browser
+console errors, and the drawn width of the correlation plots.
 
 Needs Chrome (CHROME, default /usr/bin/google-chrome) and tests/requirements.txt.
 Results go to $WORK/shots/ (report.txt plus PNGs; DIFF__*.png are side-by-side
 reference | candidate | changed pixels). Run via tests/run.sh.
 
-Fails if the candidate has a JavaScript error, a plot that is missing or squashed (other
+Fails if the candidate's page load blocks the browser for over 2 s at once, or it has a
+JavaScript error, a plot that is missing or squashed (other
 than the expected "no data" messages), or a correlation plot drawn narrower than its
 container. Pixel differences from the reference are reported, not failed: some are
 expected (see tests/README.md).
 """
 import os
 import sys
+import time
 from pathlib import Path
 
 from PIL import Image, ImageChops
@@ -28,15 +31,15 @@ TABS = {
     "Correlation Plots": ["tss_corr_plot", "gene_corr_plot"],
 }
 NO_DATA_SCENARIO = "no_methylation_gene_light"
-# (name, JS run before the screenshots) -- applied in order, state carries over
+# (name, gene to pick by typing in the Gene box, JS run before the screenshots) --
+# applied in order, state carries over
 SCENARIOS = [
-    ("default", None),
-    ("Gfap_age+sex", "$('#gene')[0].selectize.setValue('Gfap'); $('#filter').val('4').trigger('change');"),
-    ("Gfap_sex_dark", "$('#filter').val('2').trigger('change'); $('#toggle_dark').click();"),
-    ("Snap25_celltype_subset_dark", "$('#gene')[0].selectize.setValue('Snap25'); $('#filter').val('3').trigger('change');"
-                                    "$('input[name=line][value=Microglia]').click();"),
-    (NO_DATA_SCENARIO, "$('#toggle_dark').click(); $('#filter').val('7').trigger('change');"
-                       "$('#gene')[0].selectize.setValue('4732440D04Rik');"),
+    ("default", None, None),
+    ("Gfap_age+sex", "Gfap", "$('#filter').val('4').trigger('change');"),
+    ("Gfap_sex_dark", None, "$('#filter').val('2').trigger('change'); $('#toggle_dark').click();"),
+    ("Snap25_celltype_subset_dark", "Snap25", "$('#filter').val('3').trigger('change');"
+                                              "$('input[name=line][value=Microglia]').click();"),
+    (NO_DATA_SCENARIO, "4732440D04Rik", "$('#toggle_dark').click(); $('#filter').val('7').trigger('change');"),
 ]
 WORK = Path(os.environ.get("WORK", Path(os.environ.get("TMPDIR", "/tmp")) / "aging-app-tests"))
 OUT = WORK / "shots"
@@ -68,6 +71,39 @@ BOX_CHAIN = """(id) => { const out = []; let el = document.getElementById(id);
   } return out; }"""
 
 
+def pick_gene(page, app, gene):
+    """Type into the Gene box and click the matching suggestion, as a visitor would.
+
+    Logs how long the suggestion took to appear. If it never does, saves a screenshot and
+    selects the gene directly so the remaining scenarios can still run.
+    """
+    start = time.perf_counter()
+    page.locator("#gene + .selectize-control .selectize-input").click()
+    # While a gene is selected the box is "full" and selectize ignores typed characters;
+    # Backspace removes the current gene first. Key presses go to selectize's text field.
+    field = page.locator("#gene + .selectize-control .selectize-input input")
+    field.press("Backspace")
+    field.press_sequentially(gene, delay=50)
+    try:
+        page.locator(f"#gene + .selectize-control .selectize-dropdown .option[data-value='{gene}']").click(timeout=120000)
+        log(f"[{app}] typed {gene!r} in the Gene box: suggestion clicked after {time.perf_counter() - start:.1f} s")
+    except PWTimeout:
+        page.screenshot(path=OUT / f"PICK_FAILED__{app}__{gene}.png", full_page=True)
+        msg = f"typed {gene!r} in the Gene box: no suggestion after {time.perf_counter() - start:.0f} s"
+        if app == "candidate":
+            fail(msg)
+        else:
+            log(f"[{app}] {msg}; selecting it directly instead")
+        page.keyboard.press("Escape")
+        page.evaluate("(g) => { const s = $('#gene')[0].selectize; s.addOption({value: g, label: g}); s.setValue(g); }", gene)
+
+
+# Main-thread tasks over 50 ms (what makes a page unresponsive), recorded from page start
+LONG_TASKS = """window.__longTasks = [];
+new PerformanceObserver(l => l.getEntries().forEach(e => window.__longTasks.push(e.duration)))
+  .observe({type: 'longtask', buffered: true});"""
+
+
 def settle(page):
     page.wait_for_timeout(400)
     page.wait_for_function("() => !document.documentElement.classList.contains('shiny-busy')", timeout=60000)
@@ -88,12 +124,22 @@ with sync_playwright() as p:
                                 env={**os.environ, "HOME": home, "XDG_CONFIG_HOME": home, "XDG_CACHE_HOME": home})
     for app, url in APPS.items():
         page = browser.new_page(viewport={"width": 1500, "height": 1100})
+        page.add_init_script(LONG_TASKS)
         page.on("pageerror", lambda e, app=app: on_page_error(app, f"PAGE ERROR: {e}"))
         page.on("console", lambda m, app=app: m.type == "error" and log(f"[{app}] console error: {m.text[:300]}"))
-        page.goto(url)
-        page.wait_for_selector("#expression_plot .main-svg", timeout=60000)
+        start = time.perf_counter()
+        page.goto(url, timeout=600000)
+        page.wait_for_selector("#expression_plot .main-svg", timeout=600000)
+        load_secs = time.perf_counter() - start
+        tasks = page.evaluate("() => window.__longTasks")
+        log(f"[{app}] page load to first plot: {load_secs:.1f} s; main thread blocked {sum(tasks) / 1000:.1f} s "
+            f"in {len(tasks)} long tasks, longest {max(tasks, default=0) / 1000:.1f} s")
+        if app == "candidate" and max(tasks, default=0) > 2000:
+            fail(f"page load blocked the browser for {max(tasks) / 1000:.1f} s at once")
         settle(page)
-        for name, js in SCENARIOS:
+        for name, gene, js in SCENARIOS:
+            if gene:
+                pick_gene(page, app, gene)
             if js:
                 page.evaluate(f"() => {{ {js} }}")
             for tab, plots in TABS.items():

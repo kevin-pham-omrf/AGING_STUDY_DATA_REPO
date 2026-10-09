@@ -3,8 +3,8 @@
 # side on localhost, run the requested checks against both, then stop them.
 #
 # usage: tests/run.sh [check ...]
-#   checks: plots downloads inputs darkmode page perf screenshots
-#   default: plots downloads inputs darkmode page perf   (screenshots needs Chrome)
+#   checks: plots downloads inputs darkmode genesearch page perf screenshots
+#   default: plots downloads inputs darkmode genesearch page perf   (screenshots needs Chrome)
 #
 # environment:
 #   REF_REV      git revision used as the reference              (default: HEAD)
@@ -31,7 +31,7 @@ cand_external=${CAND_URL:+1}
 export CAND_URL=${CAND_URL:-http://127.0.0.1:$CAND_PORT}
 export PYTHONDONTWRITEBYTECODE=1  # keep __pycache__ out of the repo
 checks=("$@")
-[[ ${#checks[@]} -eq 0 ]] && checks=(plots downloads inputs darkmode page perf)
+[[ ${#checks[@]} -eq 0 ]] && checks=(plots downloads inputs darkmode genesearch page perf)
 
 # Reference: the app code at REF_REV, using the working tree's data files
 ref_dir=$WORK/reference
@@ -69,7 +69,7 @@ for check in "${checks[@]}"; do
   echo "== $check"
   case $check in
     plots) "$TEST_PYTHON" tests/compare_plots.py;;
-    downloads|inputs|darkmode|perf) "$TEST_PYTHON" tests/harness.py "$check";;
+    downloads|inputs|darkmode|genesearch|perf) "$TEST_PYTHON" tests/harness.py "$check";;
     page) bash tests/pagecheck.sh;;
     screenshots) "$TEST_PYTHON" tests/screenshots.py;;
     *) echo "unknown check: $check"; false;;
