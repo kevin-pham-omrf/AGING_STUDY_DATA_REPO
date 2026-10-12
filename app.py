@@ -422,7 +422,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         for comp in tss_data['COMP'].unique():
             comp_data = tss_data[tss_data['COMP'] == comp]
             for group in comp_data['GROUP'].unique():
-                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()].clip(lower=10),
+                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()].clip(lower=0),
                     boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
                     pointpos = 0, name = group, marker_color=color_map[group]),
                     row=1, col=position)
