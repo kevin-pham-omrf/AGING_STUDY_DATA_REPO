@@ -111,4 +111,3 @@ Both flags are set in the Dockerfile's `CMD`.
 ## Known follow-ups
 
 - The footer's link to the study is empty.
-- Promoter methylation values are clipped at 10% in the box plots, gene body values at 0%.

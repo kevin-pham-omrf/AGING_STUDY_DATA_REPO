@@ -413,14 +413,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         require_gene_in(tss_data, "promoter modification")
         return apply_grouping(tss_data, factors(), selected, ["COMP", gene()])
 
-    def modification_plot(mod_data, title, clip_lower):
+    def modification_plot(mod_data, title):
         position=1
         bgcolor, fontcolor, papercolor = theme(dark())
         traces = []
         for comp in mod_data['COMP'].unique():
             comp_data = mod_data[mod_data['COMP'] == comp]
             for group in comp_data['GROUP'].unique():
-                traces.append(dict(type = "box", y = json_values(comp_data[comp_data['GROUP'] == group][gene()].clip(lower=clip_lower)),
+                traces.append(dict(type = "box", y = json_values(comp_data[comp_data['GROUP'] == group][gene()].clip(lower=0)),
                     boxpoints = 'all', jitter = 0.5, marker = dict(line = dict(width=1), color = color_map[group]),
                     line = dict(width=1), pointpos = 0, name = group, **panel_axes(position)))
             position += 1
@@ -439,11 +439,11 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render_plotly
     def gene_body_plot():
-        return modification_plot(filtered_body(), "Gene Body Methylation: ", clip_lower=0)
+        return modification_plot(filtered_body(), "Gene Body Methylation: ")
 
     @render_plotly
     def tss_plot():
-        return modification_plot(filtered_tss(), "Promoter Methylation: ", clip_lower=10)
+        return modification_plot(filtered_tss(), "Promoter Methylation: ")
 
     @reactive.calc
     def filtered_gene_corr() -> pd.DataFrame:
