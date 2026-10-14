@@ -331,8 +331,10 @@ app_ui = ui.page_sidebar(
 )
 
 def server(input: Inputs, output: Outputs, session: Session):
-    # Per-session, so one visitor's toggle doesn't affect anyone else
-    dark = reactive.value(False)
+    # Per-session, so one visitor's toggle doesn't affect anyone else. Named explicitly:
+    # otherwise shiny infers the name with inspect.stack(), which stats every loaded
+    # module's files and took ~70 s on the first session on network storage.
+    dark = reactive.value(False, name="dark")
 
     ui.update_selectize("gene", choices=sorted_genes, selected="Cx3cr1", server=True)
 
