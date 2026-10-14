@@ -1,6 +1,6 @@
 # Deploying the app
 
-The app runs as a single container: `python:3.13-slim`, a non-root user, hash-checked
+The app runs as a single container: `python:3.14-slim`, a non-root user, hash-checked
 dependencies, and the app code and data files baked in. Expect an image of roughly 0.8 GB
 (about 630 MB of Python packages and 106 MB of app and data, plus the base image).
 
@@ -89,12 +89,12 @@ Both flags are set in the Dockerfile's `CMD`.
 
 - **Base image security updates:** rebuild regularly with `docker compose build --pull`, then
   `docker compose up -d`. To make builds reproducible, pin the base image by digest in the
-  Dockerfile (`FROM python:3.13-slim@sha256:...`) and update the digest deliberately.
+  Dockerfile (`FROM python:3.14-slim@sha256:...`) and update the digest deliberately.
 - **Python dependencies:** edit `requirements.in`, then regenerate the hash-locked
-  `requirements.txt` with Python 3.13 and audit it:
+  `requirements.txt` with Python 3.14 and audit it:
 
   ```bash
-  uv pip compile requirements.in --python-version 3.13 --generate-hashes -o requirements.txt
+  uv pip compile requirements.in --python-version 3.14 --generate-hashes -o requirements.txt
   pip-audit -r requirements.txt
   ```
 

@@ -1,5 +1,5 @@
 # Aging study data browser (Shiny for Python). See DEPLOY.md.
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

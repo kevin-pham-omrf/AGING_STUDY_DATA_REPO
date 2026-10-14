@@ -28,13 +28,19 @@ reference can be a revision from before the switch to plotly.js.
 Make a venv with the app's requirements, plus `tests/requirements.txt` if you'll run
 `screenshots`:
 
-`requirements.txt` is locked for Python 3.13 (the container's Python), with hashes, so the
-venv needs Python 3.13 (on the OMRF cluster: `module load python/3.13.0`). Install the
+`requirements.txt` is locked for Python 3.14 (the container's Python), with hashes, so the
+venv needs Python 3.14 (on the OMRF cluster: `module load python/3.14.7`). Install the
 test-only packages in a separate step, because pip requires hashes for everything installed
-together with a hash-locked file:
+together with a hash-locked file.
+
+The cluster's python modules set `PYTHONPATH` to the module's own site-packages, which comes
+ahead of the venv: pip skips packages it finds there, and the app imports the module's numpy,
+scipy and pandas instead of the locked ones. Unset it before installing or running the app
+(`run.sh` unsets it itself):
 
 ```bash
-python3.13 -m venv /s/ai/$USER/venvs/aging-app
+unset PYTHONPATH
+python3.14 -m venv /s/ai/$USER/venvs/aging-app
 /s/ai/$USER/venvs/aging-app/bin/pip install --require-hashes -r requirements.txt
 /s/ai/$USER/venvs/aging-app/bin/pip install -r tests/requirements.txt   # for screenshots
 

@@ -30,6 +30,7 @@ export REF_URL=http://127.0.0.1:$REF_PORT
 cand_external=${CAND_URL:+1}
 export CAND_URL=${CAND_URL:-http://127.0.0.1:$CAND_PORT}
 export PYTHONDONTWRITEBYTECODE=1  # keep __pycache__ out of the repo
+unset PYTHONPATH  # cluster python modules point it at their own packages, ahead of the venv's
 checks=("$@")
 [[ ${#checks[@]} -eq 0 ]] && checks=(plots downloads inputs darkmode genesearch page perf)
 
