@@ -1,0 +1,21 @@
+# docker compose up -d --build     (see DEPLOY.md)
+services:
+  app:
+    build: .
+    image: aging-study-app:latest
+    restart: unless-stopped
+    # Published on localhost only: put a TLS reverse proxy in front for public access
+    ports:
+      - "127.0.0.1:8000:8000"
+    # The app only reads its files; nothing in the container needs to be writable
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # ~0.6 GB in normal use; the data is loaded into memory at startup
+    mem_limit: 1536m
+    cpus: 1.0
+    pids_limit: 128

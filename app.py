@@ -1,15 +1,18 @@
+import ctypes
+from pathlib import Path
 import pyarrow.parquet as pq
 import pandas as pd
+import plotly
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from htmltools import HTMLDependency
 from shiny import App, Inputs, Outputs, Session, reactive, render, req, ui
-from shinywidgets import output_widget, render_widget
+from shiny.render.renderer import Renderer
+from shiny.types import SafeException
 from scipy.stats import linregress
 import numpy as np
 
 genes = pd.read_csv("DETECTED_GENES.csv", header=None, index_col=False)
-
-mode="light"
 
 ages = ["Young", "Adult", "Old"]
 sexes = ["Female", "Male"]
@@ -22,6 +25,7 @@ def sort_key(g):
     return (ends_with_rik, starts_with_digit, g.lower())
 
 sorted_genes = sorted(genes[0], key=sort_key)
+gene_set = set(sorted_genes)
 
 color_map = {
     'Young': "#74a5ce",
@@ -73,17 +77,176 @@ color_map = {
     'Old Male Astrocytes': "#4839c9"
 }
 
+# "Grouping" choice -> factors that are filtered on and combined into the group label
+groupings = {
+    "1": ["AGE"],
+    "2": ["SEX"],
+    "3": ["LINE"],
+    "4": ["AGE", "SEX"],
+    "5": ["AGE", "LINE"],
+    "6": ["SEX", "LINE"],
+    "7": ["AGE", "SEX", "LINE"],
+}
+
+def load(path, id_col):
+    data = pq.read_table(path).to_pandas()
+    data[id_col] = data[id_col].astype(str)
+    data["AGE"] = pd.Categorical(data["AGE"], categories=ages, ordered=True)
+    data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
+    data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
+    sort_cols = ['LINE', 'AGE', 'SEX']
+    if "COMP" in data.columns:
+        data["COMP"] = pd.Categorical(data["COMP"], categories=comp_order, ordered=True)
+        sort_cols.append('COMP')
+    return data.sort_values(sort_cols)
+
+# Load all data once at startup. Reading parquet per request is slow and blocks every
+# session, since Shiny runs this code on a single event loop.
+expr_data = load('ALL_TPM_LABELED_FILTERED.parquet', "geneid")
+body_data = load('ALL_GENE_BODY_PER_SAMPLE_T_v2.parquet', "gene")
+tss_data = load('ALL_TSS_PER_SAMPLE_T_v2.parquet', "gene")
+
+# Parsing the very wide parquet footers leaves ~350 MB of freed heap that glibc keeps
+# unless asked to give it back to the OS (Linux only; harmless to skip elsewhere).
+try:
+    ctypes.CDLL("libc.so.6").malloc_trim(0)
+except (OSError, AttributeError):
+    pass
+
+def merge_corr(mod_data, gene):
+    # Pair each sample's expression (<gene>_x) with its modification levels (<gene>_y)
+    data = pd.merge(
+        expr_data[["geneid", "AGE", "SEX", "LINE", gene]],
+        mod_data[["gene", "AGE", "SEX", "LINE", "COMP", gene]],
+        left_on = ['geneid', 'AGE', 'SEX', 'LINE'], right_on = ['gene', 'AGE', 'SEX', 'LINE'])
+    return data.sort_values(['LINE', 'AGE', 'SEX', 'COMP'])
+
+def apply_grouping(data, factors, selected, value_cols):
+    """Filter rows to the selected levels of each factor and add a GROUP label.
+
+    `selected` maps each factor to a function returning its selected levels, so only the
+    inputs for the active grouping become reactive dependencies.
+    """
+    keep = [f for f in ("AGE", "SEX", "LINE") if f in factors or f == "LINE"]
+    # Select columns before filtering rows, so the wide tables aren't copied
+    outputData = data[keep + value_cols]
+    for factor in factors:
+        outputData = outputData.loc[outputData[factor].isin(selected[factor]())]
+    outputData = outputData.copy()
+    group = outputData[factors[0]].astype(str)
+    for factor in factors[1:]:
+        group = group + " " + outputData[factor].astype(str)
+    outputData["GROUP"] = group
+    return outputData
+
+def theme(dark):
+    """Return (plot background, font color, paper background)."""
+    if dark:
+        return "#B9B9B9", "#ffffff", "#252525"
+    return "#e4e4e4", "#000000", "#ffffff"
+
+# Figures are built as plain dicts and drawn by plotly.js in the browser. Building
+# plotly.graph_objects figures and sending them as widgets took ~0.6 s per plot, all of
+# it blocking every session; plain dicts take a few milliseconds.
+def base_layout(fig):
+    """Default layout of `fig` (template and subplot positions included) as a dict.
+
+    Built once with plotly so the plots look the same as plotly-built figures. The
+    template margins match what shinywidgets used.
+    """
+    fig.layout.template.layout.margin = dict(l=16, t=32, r=16, b=16)
+    return fig.to_plotly_json()["layout"]
+
+single_layout = base_layout(go.Figure())
+three_panel_layout = base_layout(make_subplots(rows=1, cols=3))
+
+def build_layout(base, **updates):
+    """Copy `base`, merging dict values one level deep (e.g. adding an axis title)."""
+    layout = dict(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(layout.get(key), dict):
+            layout[key] = {**layout[key], **value}
+        else:
+            layout[key] = value
+    return layout
+
+def panel_axes(position):
+    """Axis references for a trace in panel 1-3 of a three-panel figure."""
+    suffix = "" if position == 1 else str(position)
+    return {"xaxis": "x" + suffix, "yaxis": "y" + suffix}
+
+def json_values(values):
+    """Floats as a JSON-safe list; NaN becomes None, which plotly.js treats as missing."""
+    return [None if v != v else v for v in np.asarray(values, dtype=float).tolist()]
+
+def title_font(color):
+    return dict(size = 24, textcase = "upper", weight = "bold", color = color)
+
+def figure(data, layout):
+    # Unless the height is fixed, fill the output container and follow its size
+    # (as shinywidgets did)
+    config = {} if "height" in layout else {"responsive": True}
+    return {"data": data, "layout": layout, "config": config}
+
+plotly_dependencies = [
+    HTMLDependency(
+        "plotly", plotly.offline.get_plotlyjs_version(),
+        source={"subdir": str(Path(plotly.__file__).parent / "package_data")},
+        script={"src": "plotly.min.js"}, all_files=False),
+    HTMLDependency(
+        "plotly-output", "1.0",
+        source={"subdir": str(Path(__file__).parent / "www")},
+        script={"src": "plotly_output.js"}, stylesheet={"href": "plotly_output.css"}, all_files=False),
+]
+
+def output_plotly(id):
+    """Placeholder for a @render_plotly figure; fills its container like output_widget()."""
+    return ui.fill.as_fillable_container(ui.fill.as_fill_item(
+        ui.div(*plotly_dependencies, id=id, class_="plotly-output")))
+
+class render_plotly(Renderer[dict]):
+    """Send a figure dict ({data, layout, config}) to the browser (see www/plotly_output.js)."""
+    async def transform(self, value: dict) -> dict:
+        return value
+
+# selectize ignores typing while its single slot holds a gene, so visitors had to delete
+# the gene first. Instead, the first key press (or Backspace/Delete) takes the gene out
+# without telling the server, so the plots stay while the visitor searches; leaving the
+# box without picking a gene puts it back.
+GENE_TYPE_TO_REPLACE = """function() {
+    var selectize = this, previous = null;
+    selectize.$control[0].addEventListener("keydown", function(e) {
+        var editing = e.key && (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete")
+            && !e.ctrlKey && !e.metaKey && !e.altKey;
+        if (editing && selectize.isFull()) {
+            previous = selectize.getValue();
+            selectize.clear(true);
+        }
+    }, true);
+    selectize.on("change", function() { previous = null; });
+    selectize.on("blur", function() {
+        if (previous !== null && selectize.getValue() === "") {
+            selectize.setValue(previous, true);
+        }
+        previous = null;
+    });
+}"""
+
 app_ui = ui.page_sidebar(
     ui.sidebar(
+        # Only the default gene is written into the page; the full list (~25,000 genes)
+        # is searched on the server as the visitor types (see update_selectize in
+        # server()). Writing every gene into the page froze the browser on load.
         ui.input_selectize(
-            "gene", 
-            "Gene", 
-            sorted_genes,
-            selected="Cx3cr1"
+            "gene",
+            "Gene",
+            ["Cx3cr1"],
+            selected="Cx3cr1",
+            options={"onInitialize": ui.js_eval(GENE_TYPE_TO_REPLACE)}
         ),
         ui.input_select(
-            "filter", 
-            "Grouping", 
+            "filter",
+            "Grouping",
             {
                 1: "Age",
                 2: "Sex",
@@ -114,7 +277,7 @@ app_ui = ui.page_sidebar(
                 "sex",
                 "Filter by Sex",
                 {
-                    "Female": "Female", 
+                    "Female": "Female",
                     "Male": "Male"
                 },
                 selected=sexes
@@ -138,27 +301,27 @@ app_ui = ui.page_sidebar(
         ui.nav_panel(
             "Gene Expression",
             ui.layout_columns(
-                output_widget("expression_plot")
+                output_plotly("expression_plot")
             )
         ),
         ui.nav_panel(
             "Gene DNA Modifications",
             ui.layout_columns(
-                output_widget("tss_plot")
+                output_plotly("tss_plot")
             ),
             ui.layout_columns(
-                output_widget("gene_body_plot")
+                output_plotly("gene_body_plot")
             )
         ),
         ui.nav_panel(
             "Correlation Plots",
             ui.layout_columns(
-                output_widget("tss_corr_plot")
+                output_plotly("tss_corr_plot")
             ),
             ui.layout_columns(
-                output_widget("gene_corr_plot")
+                output_plotly("gene_corr_plot")
             )
-            
+
         )
     ),
     ui.hr(),
@@ -168,501 +331,140 @@ app_ui = ui.page_sidebar(
 )
 
 def server(input: Inputs, output: Outputs, session: Session):
-    @render.download(filename="gene_expression_data.csv")
+    # Per-session, so one visitor's toggle doesn't affect anyone else. Named explicitly:
+    # otherwise shiny infers the name with inspect.stack(), which stats every loaded
+    # module's files and took ~70 s on the first session on network storage.
+    dark = reactive.value(False, name="dark")
+
+    ui.update_selectize("gene", choices=sorted_genes, selected="Cx3cr1", server=True)
+
+    selected = {"AGE": input.age, "SEX": input.sex, "LINE": input.line}
+
+    @render.download_button(filename="gene_expression_data.csv")
     def download_expr():
         outData = filtered_expr()
         yield outData.to_csv(index=False)
-    
-    @render.download(filename="gene_body_methylation_data.csv")
+
+    @render.download_button(filename="gene_body_methylation_data.csv")
     def download_gene():
         outData = filtered_body()
         yield outData.to_csv(index=False)
 
-    @render.download(filename="promoter_methylation_data.csv")
+    @render.download_button(filename="promoter_methylation_data.csv")
     def download_tss():
         outData = filtered_tss()
         yield outData.to_csv(index=False)
-    
+
     @reactive.effect
     @reactive.event(input.toggle_dark)
     def _():
-        global mode
-        if mode == "light":
-            ui.update_dark_mode("dark")
-            mode = "dark"
-        else:
-            ui.update_dark_mode("light")
-            mode = "light"
+        dark.set(not dark())
+        ui.update_dark_mode("dark" if dark() else "light")
 
-    @reactive.Calc
+    # Browsers can send any value for an input, not just the offered choices,
+    # so validate before using them to index the data.
+    @reactive.calc
+    def gene() -> str:
+        g = input.gene()
+        req(isinstance(g, str) and g in gene_set)
+        return g
+
+    @reactive.calc
+    def factors() -> list[str]:
+        f = input.filter()
+        req(isinstance(f, str) and f in groupings)
+        return groupings[f]
+
+    def require_gene_in(data, description):
+        if gene() not in data.columns:
+            raise SafeException(f"No {description} data is available for {gene()}.")
+
+    @reactive.calc
     def filtered_expr() -> pd.DataFrame:
-        data = pq.read_table('ALL_TPM_LABELED_FILTERED.parquet', columns=["AGE", "SEX", "LINE", input.gene()]).to_pandas()
-        data["AGE"] = pd.Categorical(data["AGE"], categories=ages, ordered=True)
-        data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
-        data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
-        sorted_data = data.sort_values(['LINE', 'AGE', 'SEX'])
-        match input.filter():
-            case "1":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", input.gene())]
-                outputData["GROUP"] = outputData["AGE"]
-                return outputData
-            case "2":
-                outputData = sorted_data.loc[sorted_data["SEX"].isin(input.sex()), ("SEX", "LINE", input.gene())]
-                outputData["GROUP"] = outputData["SEX"]
-                return outputData
-            case "3":
-                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("LINE", input.gene())]
-                outputData["GROUP"] = outputData["LINE"]
-                return outputData
-            case "4":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-                return outputData
-            case "5":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", input.gene())]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "6":
-                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("SEX", "LINE", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "7":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-                return outputData
+        require_gene_in(expr_data, "expression")
+        return apply_grouping(expr_data, factors(), selected, [gene()])
 
-    @render_widget
+    @render_plotly
     def expression_plot():
-        if input.gene() not in sorted_genes:
-            return
-        fig = go.Figure()
         data = filtered_expr()
-        if not input.toggle_dark():
-            bgcolor = "#e4e4e4"
-            fontcolor = "#000000"
-            papercolor = "#ffffff"
-        else:
-            bgcolor = "#B9B9B9"
-            fontcolor = "#ffffff"
-            papercolor = "#252525"
+        bgcolor, fontcolor, papercolor = theme(dark())
+        traces = []
         for group in data['GROUP'].unique():
-            fig.add_trace(go.Box(y = data[data['GROUP'] == group][input.gene()],
-                boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=2),
-                pointpos = 0, name = group, marker_color=color_map[group]))
-        fig.update_layout(
-            title=input.gene(),
-            title_font = dict(
-                size = 24,
-                textcase = "upper",
-                weight = "bold",
-                color = fontcolor
-            ),
-            font = dict(
-                color = fontcolor
-            ),
-            yaxis_title = "TPM",
-            xaxis_title = "",
+            traces.append(dict(type = "box", y = json_values(data[data['GROUP'] == group][gene()]),
+                boxpoints = 'all', jitter = 0.5, marker = dict(line = dict(width=1), color = color_map[group]),
+                line = dict(width=2), pointpos = 0, name = group))
+        layout = build_layout(single_layout,
+            title = dict(text = gene(), font = title_font(fontcolor)),
+            font = dict(color = fontcolor),
+            yaxis = dict(title = dict(text = "TPM")),
+            xaxis = dict(title = dict(text = "")),
             showlegend = False,
             paper_bgcolor = papercolor,
             plot_bgcolor = bgcolor,
-            margin=dict(t=100)
+            margin = dict(t=100)
         )
-        return fig
-    
-    @reactive.Calc
+        return figure(traces, layout)
+
+    @reactive.calc
     def filtered_body() -> pd.DataFrame:
-        gene_corr = pq.read_table('ALL_GENE_BODY_PER_SAMPLE_TRANSPOSED_FINAL.parquet', columns=["AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
-        gene_corr["AGE"] = pd.Categorical(gene_corr["AGE"], categories=ages, ordered=True)
-        gene_corr["SEX"] = pd.Categorical(gene_corr["SEX"], categories=sexes, ordered=True)
-        gene_corr["LINE"] = pd.Categorical(gene_corr["LINE"], categories=lines, ordered=True)
-        gene_corr["COMP"] = pd.Categorical(gene_corr["COMP"], categories=comp_order, ordered=True)
-        sorted_body = gene_corr.sort_values(['LINE', 'AGE', 'SEX', 'COMP'])
-        match input.filter():
-            case "1":
-                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-                outputData["GROUP"] = outputData["AGE"]
-                return outputData
-            case "2":
-                outputData = sorted_body.loc[sorted_body["SEX"].isin(input.sex()), ("SEX", "LINE", "COMP", input.gene())]
-                outputData["GROUP"] = outputData["SEX"]
-                return outputData
-            case "3":
-                outputData = sorted_body.loc[sorted_body["LINE"].isin(input.line()), ("LINE", "COMP", input.gene())]
-                outputData["GROUP"] = outputData["LINE"]
-                return outputData
-            case "4":
-                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-                return outputData
-            case "5":
-                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "6":
-                outputData = sorted_body.loc[sorted_body["LINE"].isin(input.line()), ("SEX", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "7":
-                outputData = sorted_body.loc[sorted_body["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-                return outputData
+        require_gene_in(body_data, "gene body modification")
+        return apply_grouping(body_data, factors(), selected, ["COMP", gene()])
 
-    @render_widget
-    def gene_body_plot():
-        if input.gene() not in sorted_genes:
-            return
-        fig = make_subplots(rows=1, cols=3)
-        body_data = filtered_body()
-        position=1
-        if not input.toggle_dark():
-            bgcolor = "#e4e4e4"
-            fontcolor = "#000000"
-            papercolor = "#ffffff"
-        else:
-            bgcolor = "#B9B9B9"
-            fontcolor = "#ffffff"
-            papercolor = "#252525"
-        for comp in body_data['COMP'].unique():
-            comp_data = body_data[body_data['COMP'] == comp]
-            for group in comp_data['GROUP'].unique():
-                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()].clip(lower=0),
-                    boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                    pointpos = 0, name = group, marker_color=color_map[group]),
-                    row=1, col=position)
-            position += 1
-        fig.update_layout(
-            title = "Gene Body Methylation: " + input.gene(),
-            showlegend = False,
-            title_font = dict(
-                size = 24,
-                textcase = "upper",
-                weight = "bold",
-                color = fontcolor
-            ),
-            font = dict(
-                color = fontcolor
-            ),
-            paper_bgcolor = papercolor,
-            plot_bgcolor = bgcolor,
-            margin=dict(t=100)
-        )
-        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
-        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
-        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
-        return fig
-
-    @reactive.Calc
+    @reactive.calc
     def filtered_tss() -> pd.DataFrame:
-        tss_corr = pq.read_table('ALL_TSS_PER_SAMPLE_TRANSPOSED.parquet', columns=["AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
-        tss_corr["AGE"] = pd.Categorical(tss_corr["AGE"], categories=ages, ordered=True)
-        tss_corr["SEX"] = pd.Categorical(tss_corr["SEX"], categories=sexes, ordered=True)
-        tss_corr["LINE"] = pd.Categorical(tss_corr["LINE"], categories=lines, ordered=True)
-        tss_corr["COMP"] = pd.Categorical(tss_corr["COMP"], categories=comp_order, ordered=True)
-        sorted_tss = tss_corr.sort_values(['LINE', 'AGE', 'SEX', 'COMP'])
-        match input.filter():
-            case "1":
-                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-                outputData["GROUP"] = outputData["AGE"]
-                return outputData
-            case "2":
-                outputData = sorted_tss.loc[sorted_tss["SEX"].isin(input.sex()), ("SEX", "LINE", "COMP", input.gene())]
-                outputData["GROUP"] = outputData["SEX"]
-                return outputData
-            case "3":
-                outputData = sorted_tss.loc[sorted_tss["LINE"].isin(input.line()), ("LINE", "COMP", input.gene())]
-                outputData["GROUP"] = outputData["LINE"]
-                return outputData
-            case "4":
-                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-                return outputData
-            case "5":
-                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "6":
-                outputData = sorted_tss.loc[sorted_tss["LINE"].isin(input.line()), ("SEX", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "7":
-                outputData = sorted_tss.loc[sorted_tss["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", "COMP", input.gene())]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-                return outputData
+        require_gene_in(tss_data, "promoter modification")
+        return apply_grouping(tss_data, factors(), selected, ["COMP", gene()])
 
-    @render_widget
-    def tss_plot():
-        if input.gene() not in sorted_genes:
-            return
-        fig = make_subplots(rows=1, cols=3)
-        tss_data = filtered_tss()
+    def modification_plot(mod_data, title):
         position=1
-        if not input.toggle_dark():
-            bgcolor = "#e4e4e4"
-            fontcolor = "#000000"
-            papercolor = "#ffffff"
-        else:
-            bgcolor = "#B9B9B9"
-            fontcolor = "#ffffff"
-            papercolor = "#252525"
-        for comp in tss_data['COMP'].unique():
-            comp_data = tss_data[tss_data['COMP'] == comp]
+        bgcolor, fontcolor, papercolor = theme(dark())
+        traces = []
+        for comp in mod_data['COMP'].unique():
+            comp_data = mod_data[mod_data['COMP'] == comp]
             for group in comp_data['GROUP'].unique():
-                fig.add_trace(go.Box(y = comp_data[comp_data['GROUP'] == group][input.gene()].clip(lower=0),
-                    boxpoints = 'all', jitter = 0.5, marker_line_width=1, line = dict(width=1),
-                    pointpos = 0, name = group, marker_color=color_map[group]),
-                    row=1, col=position)
+                traces.append(dict(type = "box", y = json_values(comp_data[comp_data['GROUP'] == group][gene()].clip(lower=0)),
+                    boxpoints = 'all', jitter = 0.5, marker = dict(line = dict(width=1), color = color_map[group]),
+                    line = dict(width=1), pointpos = 0, name = group, **panel_axes(position)))
             position += 1
-        fig.update_layout(
-            title = "Promoter Methylation: " + input.gene(),
+        layout = build_layout(three_panel_layout,
+            title = dict(text = title + gene(), font = title_font(fontcolor)),
             showlegend = False,
-            title_font = dict(
-                size = 24,
-                textcase = "upper",
-                weight = "bold",
-                color = fontcolor
-            ),
-            font = dict(
-                color = fontcolor
-            ),
+            font = dict(color = fontcolor),
             paper_bgcolor = papercolor,
             plot_bgcolor = bgcolor,
-            margin=dict(t=100)
+            margin = dict(t=100),
+            yaxis = dict(title = dict(text = "5modCG (%)")),
+            yaxis2 = dict(title = dict(text = "5mCG (%)")),
+            yaxis3 = dict(title = dict(text = "5hmCG (%)"))
         )
-        # range=[0, 100]
-        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
-        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
-        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
-        return fig
+        return figure(traces, layout)
 
-    @reactive.Calc
+    @render_plotly
+    def gene_body_plot():
+        return modification_plot(filtered_body(), "Gene Body Methylation: ")
+
+    @render_plotly
+    def tss_plot():
+        return modification_plot(filtered_tss(), "Promoter Methylation: ")
+
+    @reactive.calc
     def filtered_gene_corr() -> pd.DataFrame:
-        rpkm_corr = pq.read_table('ALL_TPM_LABELED_FILTERED.parquet', columns=["geneid", "AGE", "SEX", "LINE", input.gene()]).to_pandas()
-        gene_corr = pq.read_table('ALL_GENE_BODY_PER_SAMPLE_T_v2.parquet', columns=["gene", "AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
-        rpkm_corr['geneid'] = rpkm_corr['geneid'].astype(str)
-        gene_corr['gene'] = gene_corr['gene'].astype(str)
+        require_gene_in(expr_data, "expression")
+        require_gene_in(body_data, "gene body modification")
+        data = merge_corr(body_data, gene())
+        return apply_grouping(data, factors(), selected, [f"{gene()}_x", f"{gene()}_y", "COMP"])
 
-        data = pd.merge(rpkm_corr, gene_corr, left_on = ['geneid', 'AGE', 'SEX', 'LINE'], right_on = ['gene', 'AGE', 'SEX', 'LINE'])
-        data["AGE"] = pd.Categorical(data["AGE"], categories=ages, ordered=True)
-        data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
-        data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
-        data["COMP"] = pd.Categorical(data["COMP"], categories=comp_order, ordered=True)
-        sorted_data = data.sort_values(['LINE', 'AGE', 'SEX', 'COMP'])
-        match input.filter():
-            case "1":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData["GROUP"] = outputData["AGE"]
-                return outputData
-            case "2":
-                outputData = sorted_data.loc[sorted_data["SEX"].isin(input.sex()), ("SEX", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData["GROUP"] = outputData["SEX"]
-                return outputData
-            case "3":
-                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData["GROUP"] = outputData["LINE"]
-                return outputData
-            case "4":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-                return outputData
-            case "5":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "6":
-                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("SEX", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "7":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-                return outputData
-
-    @render_widget
-    def gene_corr_plot():
-        if input.gene() not in sorted_genes:
-            return
-        fig = make_subplots(rows=1, cols=3)
-        corr_data = filtered_gene_corr()
-        position = 1
-
-        if not input.toggle_dark():
-            bgcolor = "#e4e4e4"
-            fontcolor = "#000000"
-            papercolor = "#ffffff"
-        else:
-            bgcolor = "#B9B9B9"
-            fontcolor = "#ffffff"
-            papercolor = "#252525"
-
-        legendKey = [False, False, True]
-
-        for comp in corr_data['COMP'].unique():
-            comp_data = corr_data[corr_data['COMP'] == comp]
-
-            # ---- Scatter points for each group ----
-            for group in comp_data['GROUP'].unique():
-                subset = comp_data[comp_data['GROUP'] == group]
-
-                x = subset[f"{input.gene()}_x"]
-                y = subset[f"{input.gene()}_y"]
-
-                # Remove NaNs and ensure x>0 for log scale
-                mask = x.notna() & y.notna() & (x > 0)
-                x = x[mask]
-                y = y[mask]
-
-                # Floor y values at 0
-                y = np.maximum(y, 0)
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=y,
-                        name=group,
-                        marker_color=color_map[group],
-                        mode="markers",
-                        legendgroup="test",
-                        showlegend=legendKey[position-1]
-                    ),
-                    row=1,
-                    col=position
-                )
-
-            # ---- One regression line across all groups ----
-            x_all = comp_data[f"{input.gene()}_x"]
-            y_all = comp_data[f"{input.gene()}_y"]
-
-            mask_all = x_all.notna() & y_all.notna() & (x_all > 0)
-            x_all = x_all[mask_all]
-            y_all = np.maximum(y_all[mask_all], 0)
-
-            if len(x_all) > 1:
-                x_log = np.log10(x_all)
-                result = linregress(x_log, y_all)
-
-                x_sorted = np.sort(x_all)
-                y_fit = result.slope * np.log10(x_sorted) + result.intercept
-                y_fit = np.maximum(y_fit, 0)  # keep regression line >=0
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_sorted,
-                        y=y_fit,
-                        mode="lines",
-                        line=dict(color="black", width=2),
-                        name="Trendline",
-                        showlegend=False
-                    ),
-                    row=1,
-                    col=position
-                )
-
-            position += 1
-
-        fig.update_layout(
-            title="Gene Body Correlation: " + input.gene(),
-            showlegend=True,
-            title_font=dict(size=24, textcase = "upper", weight="bold", color=fontcolor),
-            font=dict(color=fontcolor),
-            paper_bgcolor=papercolor,
-            plot_bgcolor=bgcolor,
-            margin=dict(t=100),
-            height=600
-        )
-
-        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
-        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
-        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
-
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=1)
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=2)
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=3)
-
-        return fig
-
-    @reactive.Calc
+    @reactive.calc
     def filtered_tss_corr() -> pd.DataFrame:
-        rpkm_corr = pq.read_table('ALL_TPM_LABELED_FILTERED.parquet', columns=["geneid", "AGE", "SEX", "LINE", input.gene()]).to_pandas()
-        tss_corr = pq.read_table('ALL_TSS_PER_SAMPLE_T_v2.parquet', columns=["gene", "AGE", "SEX", "LINE", "COMP", input.gene()]).to_pandas()
-        rpkm_corr['geneid'] = rpkm_corr['geneid'].astype(str)
-        tss_corr['gene'] = tss_corr['gene'].astype(str)
-        data = pd.merge(rpkm_corr, tss_corr, left_on = ['geneid', 'AGE', 'SEX', 'LINE'], right_on = ['gene', 'AGE', 'SEX', 'LINE'])
-        data["AGE"] = pd.Categorical(data["AGE"], categories=ages, ordered=True)
-        data["SEX"] = pd.Categorical(data["SEX"], categories=sexes, ordered=True)
-        data["LINE"] = pd.Categorical(data["LINE"], categories=lines, ordered=True)
-        data["COMP"] = pd.Categorical(data["COMP"], categories=comp_order, ordered=True)
-        sorted_data = data.sort_values(['LINE', 'AGE', 'SEX', 'COMP'])
-        match input.filter():
-            case "1":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData["GROUP"] = outputData["AGE"]
-                return outputData
-            case "2":
-                outputData = sorted_data.loc[sorted_data["SEX"].isin(input.sex()), ("SEX", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData["GROUP"] = outputData["SEX"]
-                return outputData
-            case "3":
-                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData["GROUP"] = outputData["LINE"]
-                return outputData
-            case "4":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)
-                return outputData
-            case "5":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "6":
-                outputData = sorted_data.loc[sorted_data["LINE"].isin(input.line()), ("SEX", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData["GROUP"] = outputData["SEX"].astype(str) + " " + outputData["LINE"].astype(str)
-                return outputData
-            case "7":
-                outputData = sorted_data.loc[sorted_data["AGE"].isin(input.age()), ("AGE", "SEX", "LINE", f"{input.gene()}_x", f"{input.gene()}_y", "COMP")]
-                outputData = outputData.loc[outputData["SEX"].isin(input.sex()), ]
-                outputData = outputData.loc[outputData["LINE"].isin(input.line()), ]
-                outputData["GROUP"] = outputData["AGE"].astype(str) + " " + outputData["SEX"].astype(str)  + " " + outputData["LINE"].astype(str) 
-                return outputData
+        require_gene_in(expr_data, "expression")
+        require_gene_in(tss_data, "promoter modification")
+        data = merge_corr(tss_data, gene())
+        return apply_grouping(data, factors(), selected, [f"{gene()}_x", f"{gene()}_y", "COMP"])
 
-    @render_widget
-    def tss_corr_plot():
-        if input.gene() not in sorted_genes:
-            return
-        fig = make_subplots(rows=1, cols=3)
-        corr_data = filtered_tss_corr()
+    def correlation_plot(corr_data, title):
         position = 1
-
-        if not input.toggle_dark():
-            bgcolor = "#e4e4e4"
-            fontcolor = "#000000"
-            papercolor = "#ffffff"
-        else:
-            bgcolor = "#B9B9B9"
-            fontcolor = "#ffffff"
-            papercolor = "#252525"
+        bgcolor, fontcolor, papercolor = theme(dark())
+        traces = []
 
         legendKey = [False, False, True]
 
@@ -673,8 +475,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             for group in comp_data['GROUP'].unique():
                 subset = comp_data[comp_data['GROUP'] == group]
 
-                x = subset[f"{input.gene()}_x"]
-                y = subset[f"{input.gene()}_y"]
+                x = subset[f"{gene()}_x"]
+                y = subset[f"{gene()}_y"]
 
                 # Remove NaNs and ensure x>0 for log scale
                 mask = x.notna() & y.notna() & (x > 0)
@@ -684,23 +486,21 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # Floor y values at 0
                 y = np.maximum(y, 0)
 
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=y,
-                        name=group,
-                        marker_color=color_map[group],
-                        mode="markers",
-                        legendgroup="test",
-                        showlegend=legendKey[position-1]
-                    ),
-                    row=1,
-                    col=position
-                )
+                traces.append(dict(
+                    type="scatter",
+                    x=json_values(x),
+                    y=json_values(y),
+                    name=group,
+                    marker=dict(color=color_map[group]),
+                    mode="markers",
+                    legendgroup="test",
+                    showlegend=legendKey[position-1],
+                    **panel_axes(position)
+                ))
 
             # ---- One regression line across all groups ----
-            x_all = comp_data[f"{input.gene()}_x"]
-            y_all = comp_data[f"{input.gene()}_y"]
+            x_all = comp_data[f"{gene()}_x"]
+            y_all = comp_data[f"{gene()}_y"]
 
             mask_all = x_all.notna() & y_all.notna() & (x_all > 0)
             x_all = x_all[mask_all]
@@ -714,40 +514,45 @@ def server(input: Inputs, output: Outputs, session: Session):
                 y_fit = result.slope * np.log10(x_sorted) + result.intercept
                 y_fit = np.maximum(y_fit, 0)  # keep regression line >=0
 
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_sorted,
-                        y=y_fit,
-                        mode="lines",
-                        line=dict(color="black", width=2),
-                        name="Trendline",
-                        showlegend=False
-                    ),
-                    row=1,
-                    col=position
-                )
+                traces.append(dict(
+                    type="scatter",
+                    x=json_values(x_sorted),
+                    y=json_values(y_fit),
+                    mode="lines",
+                    line=dict(color="black", width=2),
+                    name="Trendline",
+                    showlegend=False,
+                    **panel_axes(position)
+                ))
 
             position += 1
 
-        fig.update_layout(
-            title="Promoter Correlation: " + input.gene(),
+        log_tpm_axis = dict(type="log", title=dict(text="TPM"))
+        layout = build_layout(three_panel_layout,
+            title=dict(text=title + gene(), font=title_font(fontcolor)),
             showlegend=True,
-            title_font=dict(size=24, textcase = "upper", weight="bold", color=fontcolor),
             font=dict(color=fontcolor),
             paper_bgcolor=papercolor,
             plot_bgcolor=bgcolor,
             margin=dict(t=100),
-            height=600
+            height=600,
+            yaxis=dict(title=dict(text="5modCG (%)")),
+            yaxis2=dict(title=dict(text="5mCG (%)")),
+            yaxis3=dict(title=dict(text="5hmCG (%)")),
+            xaxis=log_tpm_axis, xaxis2=log_tpm_axis, xaxis3=log_tpm_axis
         )
 
-        fig.update_yaxes(title_text="5modCG (%)", row=1, col=1)
-        fig.update_yaxes(title_text="5mCG (%)", row=1, col=2)
-        fig.update_yaxes(title_text="5hmCG (%)", row=1, col=3)
+        return figure(traces, layout)
 
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=1)
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=2)
-        fig.update_xaxes(type="log", title_text="TPM", row=1, col=3)
+    @render_plotly
+    def gene_corr_plot():
+        return correlation_plot(filtered_gene_corr(), "Gene Body Correlation: ")
 
-        return fig
-    
+    @render_plotly
+    def tss_corr_plot():
+        return correlation_plot(filtered_tss_corr(), "Promoter Correlation: ")
+
 app = App(app_ui, server)
+# Show a generic message instead of raw exception text in the browser
+# (SafeException messages, like "no data for this gene", are still shown).
+app.sanitize_errors = True

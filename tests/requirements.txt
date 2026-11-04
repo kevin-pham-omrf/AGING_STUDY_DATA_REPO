@@ -1,0 +1,5 @@
+# Extra packages for tests/screenshots.py (install alongside the app's requirements.txt).
+# Playwright drives an installed Chrome (CHROME, default /usr/bin/google-chrome); no
+# browser download is needed.
+playwright==1.63.0
+pillow==12.3.0
